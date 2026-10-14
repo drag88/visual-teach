@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson Title</title>
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/ask.css">
+</head>
+<body>
+<main>
+
+<!-- Starter lesson. It runs as is, so the check script passes on a fresh workspace.
+     Replace every part; keep the order: win, hero diagram, prose that walks it, close-ups, practice, read next. -->
+
+<nav class="course">
+  <a href="../index.html">Course</a>
+  <span>Lesson 1</span>
+</nav>
+
+<h1>Lesson title</h1>
+<p class="subtitle">One sentence that states what this lesson shows.</p>
+
+<div class="win"><b>By the end</b>The one thing the learner can do after this lesson.</div>
+
+<figure class="diagram" id="hero-figure">
+<div class="scroll">
+<svg class="dg" viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="hero-title hero-desc">
+<title id="hero-title">Input becomes output</title>
+<desc id="hero-desc">Two boxes: an input flows into a step that produces the output.</desc>
+<defs>
+<marker id="hero-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" class="f-muted"/></marker>
+</defs>
+<rect width="640" height="200" class="f-paper"/>
+<g data-spot="input"><rect x="64" y="68" width="160" height="64" rx="6" class="box ext"/>
+<text x="144" y="98" font-size="16" font-weight="600" text-anchor="middle" class="t-ink">Input</text>
+<text x="144" y="118" font-size="12" text-anchor="middle" class="mono t-muted">what comes in</text></g>
+<line x1="224" y1="100" x2="412" y2="100" class="s-muted" stroke-width="1.2" marker-end="url(#hero-arrow)"/>
+<g data-spot="step"><rect x="416" y="68" width="160" height="64" rx="6" class="box focal"/>
+<text x="496" y="98" font-size="16" font-weight="600" text-anchor="middle" class="t-ink">Step</text>
+<text x="496" y="118" font-size="12" text-anchor="middle" class="mono t-muted">the focal idea</text></g>
+</svg>
+</div>
+<figcaption>A caption that states the diagram's claim, not its shapes.</figcaption>
+</figure>
+
+<h2>Walk the picture</h2>
+<p>Prose that explains the diagram part by part, with a citation for each claim.</p>
+
+<h2>Practice</h2>
+
+<div class="quiz spot" data-from="hero-figure" data-answer="step">
+  <p class="q">Tap the part that does the work.</p>
+  <p class="fb">Why that part, in one or two sentences.</p>
+</div>
+
+<div class="quiz mcq">
+  <p class="q">A question that needs recall, not recognition.</p>
+  <div class="opts">
+    <button class="opt" data-right>The right answer in six words</button>
+    <button class="opt">A tempting wrong answer, six words</button>
+    <button class="opt">Another plausible wrong one, six words</button>
+  </div>
+  <p class="fb">Why the right answer is right.</p>
+</div>
+
+<p class="score" id="score"></p>
+
+<div class="read">
+  <b>Read next</b>
+  The single best primary source for this lesson, with what to read in it.
+</div>
+
+<footer>Ask your teacher about anything that didn't land.</footer>
+
+</main>
+<script src="../assets/quiz.js"></script>
+<script src="../assets/ask.js"></script>
+</body>
+</html>

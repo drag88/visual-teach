@@ -1,0 +1,5 @@
+interface:
+  display_name: "Visual Teach"
+  short_description: "Learn a topic through visual, interactive lessons"
+policy:
+  allow_implicit_invocation: false

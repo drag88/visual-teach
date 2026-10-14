@@ -1,0 +1,130 @@
+/* Ask while reading (ask.js). Uses the colour and type tokens from style.css. */
+
+/* Cards in the margin are placed relative to the lesson column. */
+body.ask-on main { position: relative; }
+main > [data-p] { position: relative; }
+main > [data-p]::before {
+  content: "\00b6" attr(data-p);
+  position: absolute; left: -2.6rem; top: 0.2em; width: 2rem; text-align: right;
+  font-family: var(--mono); font-size: 0.62rem; color: var(--muted); opacity: 0.55;
+}
+main > .has-ask::before { color: var(--accent); opacity: 1; font-weight: 600; }
+main > .has-ask::after {
+  content: ""; position: absolute; left: -0.6rem; top: 0.55em; display: none;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+}
+main > .ask-flash { animation: ask-flash 1.4s ease-out; }
+@keyframes ask-flash { from { background: var(--accent-tint); } to { background: transparent; } }
+::highlight(asked) { background-color: var(--accent-tint); text-decoration: underline; text-decoration-color: var(--accent); }
+@media (max-width: 720px) {
+  main > [data-p]::before { display: none; }
+  main > .has-ask::after { display: block; }
+}
+
+/* Hint shown when the lesson is opened without the server */
+.ask-hint { font-family: var(--sans); font-size: 0.72rem; color: var(--muted); margin: 3rem 0 0; text-align: center; }
+@media print { .ask-hint, .ask-bar, .ask-sel { display: none !important; } }
+
+/* Bar that appears over a highlight */
+.ask-sel {
+  position: absolute; z-index: 20; display: flex; flex-wrap: wrap; gap: 0.2rem; align-items: center;
+  max-width: calc(100vw - 1rem); padding: 0.25rem; border-radius: 3px;
+  background: var(--ink); color: var(--bg);
+  font-family: var(--sans); font-size: 0.78rem;
+}
+.ask-sel[hidden] { display: none; }
+.ask-sel button {
+  font: inherit; color: inherit; background: transparent; border: 0; border-radius: 3px;
+  padding: 0.3rem 0.55rem; cursor: pointer;
+}
+.ask-sel button:hover, .ask-sel button:focus-visible { background: rgba(255, 255, 255, 0.16); outline: none; }
+.ask-sel-form { display: flex; gap: 0.25rem; flex: 1 1 100%; }
+.ask-sel-form[hidden] { display: none; }
+.ask-sel-form input {
+  flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var(--bg);
+  border: 0; border-radius: 3px; padding: 0.3rem 0.5rem;
+}
+.ask-sel.docked {
+  position: fixed; left: 50%; transform: translateX(-50%); top: auto;
+  bottom: calc(4rem + env(safe-area-inset-bottom));
+}
+
+/* Answer cards */
+.ask-card {
+  font-family: var(--sans); font-size: 0.8rem; line-height: 1.5; color: var(--ink);
+  background: var(--bg); border-left: 1px solid var(--accent);
+  padding: 0.1rem 0 0.1rem 0.9rem; margin: 0.6rem 0 1.4rem;
+}
+.ask-card.in-margin { position: absolute; left: calc(100% + 2.5rem); width: 19rem; margin: 0; }
+.ask-card.in-margin::before {
+  content: ""; position: absolute; left: calc(-2.5rem - 3px); top: 1rem; width: 2.5rem;
+  border-top: 1px solid var(--accent); opacity: 0.6;
+}
+.ask-head { display: flex; align-items: baseline; gap: 0.4rem; }
+.ask-kind { color: var(--accent); font-weight: 600; }
+.ask-where { font-family: var(--mono); font-size: 0.68rem; color: var(--muted); }
+.ask-quote { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-toggle {
+  font: inherit; color: var(--muted); background: none; border: 0; cursor: pointer; padding: 0 0.2rem;
+}
+.ask-ex + .ask-ex { border-top: 1px dotted var(--rule); margin-top: 0.5rem; padding-top: 0.4rem; }
+.ask-q { margin: 0.35rem 0 0.2rem; font-weight: 600; }
+.ask-status { margin: 0.3rem 0; color: var(--muted); font-style: italic; }
+.ask-status:empty { display: none; }
+.ask-error { color: var(--bad); font-style: normal; }
+.ask-answer p, .ask-answer ul, .ask-answer ol { margin: 0.35rem 0; }
+.ask-answer ul, .ask-answer ol { padding-left: 1.1rem; }
+.ask-answer pre { font-size: 0.7rem; padding: 0.5rem; margin: 0.4rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask-answer code { font-size: 0.72rem; overflow-wrap: anywhere; background: none; padding: 0; color: var(--muted); }
+.ask-answer mark { background: var(--accent-tint); color: inherit; padding: 0 0.1rem; border-bottom: 1px solid var(--accent); }
+.ask-answer .ask-outside { color: var(--muted); font-size: 0.75rem; }
+.ask-pchip { font-family: var(--mono); font-size: 0.68rem; text-decoration: none; color: var(--accent); }
+.ask-pchip:hover, .ask-pchip:focus-visible { text-decoration: underline; }
+.ask-foot { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.45rem; font-size: 0.7rem; color: var(--muted); }
+.ask-meta { flex: 1; min-width: 0; font-family: var(--mono); font-size: 0.64rem; }
+.ask-foot button {
+  font: inherit; color: var(--muted); background: none; border: 0; cursor: pointer; padding: 0.1rem 0.2rem;
+}
+.ask-foot button:hover, .ask-foot button:focus-visible { color: var(--ink); text-decoration: underline; }
+.ask-follow { display: flex; gap: 0.3rem; margin-top: 0.45rem; }
+.ask-follow input, .ask-bar input {
+  flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var(--bg);
+  border: 1px solid var(--rule); border-radius: 3px; padding: 0.35rem 0.5rem;
+}
+.ask-follow button, .ask-send {
+  font: inherit; border: 0; border-radius: 3px; padding: 0.3rem 0.6rem; cursor: pointer;
+  background: var(--ink); color: var(--bg);
+}
+.ask-card.busy .ask-follow button { opacity: 0.4; }
+.ask-card.folded .ask-log > .ask-ex:not(:first-child),
+.ask-card.folded .ask-foot, .ask-card.folded .ask-follow { display: none; }
+.ask-card.folded .ask-answer {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* Ask about the whole lesson */
+body.ask-on { padding-bottom: 5rem; }
+.ask-bar {
+  position: fixed; z-index: 15; left: 0.75rem; right: 0.75rem;
+  bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  max-width: 42rem; margin: 0 auto; display: flex; gap: 0.4rem; align-items: center;
+  padding: 0.4rem; border: 1px solid var(--rule); border-radius: 3px; background: var(--bg);
+  font-family: var(--sans); font-size: 0.8rem;
+}
+.ask-bar input { border: 0; }
+.ask-key {
+  font-family: var(--mono); font-size: 0.66rem; color: var(--muted);
+  border: 1px solid var(--rule); border-radius: 4px; padding: 0 0.3rem;
+}
+.ask-mode { display: flex; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.ask-mode button {
+  font: inherit; font-size: 0.72rem; color: var(--muted); background: none; border: 0; padding: 0.25rem 0.5rem; cursor: pointer;
+}
+.ask-mode button[aria-pressed="true"] { background: var(--note-bg); color: var(--ink); font-weight: 600; }
+@media (max-width: 720px) { .ask-key { display: none; } }
+
+/* Wide screens: text on the left, answer cards in the right margin */
+@media (min-width: 1180px) {
+  body.ask-on main { margin-left: max(3.5rem, calc(50% - 32rem)); }
+  body.ask-on .ask-bar { left: max(3.5rem, calc(50% - 32rem)); right: auto; width: 42rem; margin: 0; }
+}

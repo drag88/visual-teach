@@ -1,0 +1,180 @@
+/* Shared stylesheet for every visual-teach course. Minimal: Helvetica, white, hairlines, one accent. */
+
+:root {
+  --bg: #ffffff;
+  --ink: #111111;
+  --muted: #737373;
+  --rule: #e6e6e6;
+  --accent: #2b59c3;
+  --accent-tint: rgba(43, 89, 195, 0.08);
+  --code-bg: #f5f5f5;
+  --note-bg: #f7f7f7;
+  --good: #1e7a3c;
+  --good-bg: #eef7f1;
+  --bad: #c62828;
+  --bad-bg: #fdeeee;
+  --sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f0f0f;
+    --ink: #ededed;
+    --muted: #8f8f8f;
+    --rule: #262626;
+    --accent: #7ea2ff;
+    --accent-tint: rgba(126, 162, 255, 0.12);
+    --code-bg: #1a1a1a;
+    --note-bg: #171717;
+    --good: #7fd19b;
+    --good-bg: #13261a;
+    --bad: #ff8a80;
+    --bad-bg: #2a1414;
+  }
+}
+
+* { box-sizing: border-box; }
+html { font-size: 17px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+main { max-width: 40rem; margin: 0 auto; padding: 3.5rem 1.25rem 5rem; }
+
+nav.course { font-size: 0.78rem; color: var(--muted); display: flex; gap: 1.2rem; flex-wrap: wrap; margin-bottom: 3rem; }
+nav.course a { color: var(--muted); text-decoration: none; }
+nav.course a:hover { color: var(--ink); }
+
+h1 { font-size: 2.1rem; line-height: 1.1; font-weight: 500; letter-spacing: -0.02em; margin: 0 0 0.6rem; }
+.subtitle { color: var(--muted); margin: 0 0 3rem; font-size: 1.1rem; line-height: 1.45; }
+h2 { font-size: 1.2rem; font-weight: 500; letter-spacing: -0.01em; margin: 3.2rem 0 0.8rem; }
+h3 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.4rem; }
+p, li { margin: 0 0 1rem; }
+a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--muted); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--ink); }
+strong { font-weight: 600; }
+
+code, pre { font-family: var(--mono); font-size: 0.82em; font-variant-ligatures: none; }
+pre { background: var(--code-bg); padding: 1rem 1.1rem; overflow-x: auto; line-height: 1.5; margin: 1.2rem 0 0.4rem; }
+pre code { font-size: 1em; }
+pre .hl { background: var(--accent-tint); }
+@media (max-width: 640px) { pre { white-space: pre-wrap; overflow-wrap: anywhere; } }
+.src { font-size: 0.72rem; color: var(--muted); margin: 0 0 1.4rem; font-family: var(--mono); }
+
+.win { margin: 0 0 3rem; }
+.win b { display: block; font-size: 0.78rem; font-weight: 500; color: var(--muted); margin-bottom: 0.2rem; }
+.aside { color: var(--muted); margin: 1.6rem 0; }
+.read { border-top: 1px solid var(--rule); padding: 1.2rem 0 0; margin: 3rem 0 2rem; }
+.read b { display: block; font-size: 0.78rem; font-weight: 500; color: var(--muted); margin-bottom: 0.2rem; }
+
+table { border-collapse: collapse; width: 100%; font-size: 0.88rem; margin: 1.2rem 0 1.8rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.55rem 0.6rem 0.55rem 0; border-bottom: 1px solid var(--rule); }
+th { font-weight: 500; color: var(--muted); font-size: 0.78rem; }
+.table-wrap { overflow-x: auto; }
+/* On a phone, stack each table row instead of clipping columns: first cell as the row's name. */
+@media (max-width: 640px) {
+  main table, main tbody, main tr, main td { display: block; width: 100%; }
+  main tr:has(> th) { display: none; }
+  main tr { border-bottom: 1px solid var(--rule); padding: 0.6rem 0; }
+  main td { border: 0; padding: 0.1rem 0; }
+  main td:first-child { font-weight: 600; }
+}
+
+/* Numbered steps */
+ol.turn { list-style: none; padding: 0; margin: 1.2rem 0 1.8rem; counter-reset: step; }
+ol.turn li { counter-increment: step; display: grid; grid-template-columns: 1.8rem 1fr; gap: 0.6rem; padding: 0.6rem 0; margin: 0; border-bottom: 1px solid var(--rule); }
+ol.turn li::before { content: counter(step); font-size: 0.8rem; color: var(--muted); padding-top: 0.15rem; }
+ol.turn .who { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); display: block; }
+
+/* Quiz widgets (see quiz.js) */
+.quiz { border-top: 1px solid var(--rule); padding: 1.4rem 0 0.4rem; margin: 1.6rem 0; }
+.quiz .q { font-weight: 500; margin: 0 0 0.9rem; }
+.quiz .opts { display: grid; gap: 0.45rem; }
+.quiz button.opt {
+  font: inherit; font-size: 0.92rem; text-align: left; color: var(--ink);
+  background: transparent; border: 1px solid var(--rule); border-radius: 2px;
+  padding: 0.6rem 0.75rem; cursor: pointer;
+}
+.quiz button.opt:hover { border-color: var(--muted); }
+.quiz button.opt.right { background: var(--good-bg); border-color: var(--good); }
+.quiz button.opt.wrong { background: var(--bad-bg); border-color: var(--bad); }
+.quiz .fb { margin: 0.8rem 0 0; font-size: 0.9rem; display: none; }
+.quiz .fb.show { display: block; }
+.quiz .fb.ok::before { content: "Right. "; color: var(--good); font-weight: 600; }
+.quiz .fb.no::before { content: "Not quite. "; color: var(--bad); font-weight: 600; }
+.quiz textarea {
+  width: 100%; min-height: 4.5rem; font: inherit; font-size: 0.92rem; color: var(--ink);
+  background: var(--bg); border: 1px solid var(--rule); border-radius: 2px; padding: 0.6rem;
+}
+.quiz button.act {
+  font: inherit; font-size: 0.85rem; margin-top: 0.7rem; padding: 0.45rem 0.9rem; cursor: pointer;
+  background: var(--ink); color: var(--bg); border: 0; border-radius: 2px;
+}
+.quiz .model { display: none; margin-top: 0.9rem; padding: 0.8rem 1rem; background: var(--note-bg); font-size: 0.92rem; }
+.quiz .model.show { display: block; }
+.quiz .order-row { display: grid; grid-template-columns: 3.4rem 1fr; gap: 0.6rem; align-items: center; padding: 0.35rem 0; font-size: 0.92rem; }
+.quiz select { font: inherit; font-size: 0.9rem; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 2px; padding: 0.25rem; }
+.quiz .order-row.right select { border-color: var(--good); background: var(--good-bg); }
+.quiz .order-row.wrong select { border-color: var(--bad); background: var(--bad-bg); }
+.quiz .match-row { display: grid; grid-template-columns: 1fr 8.5rem; gap: 0.6rem; align-items: center; padding: 0.35rem 0; font-size: 0.92rem; border-bottom: 1px solid var(--rule); }
+.quiz .match-row.right select { border-color: var(--good); background: var(--good-bg); }
+.quiz .match-row.wrong select { border-color: var(--bad); background: var(--bad-bg); }
+.score { font-size: 0.8rem; color: var(--muted); text-align: right; }
+
+footer { margin-top: 3.5rem; padding-top: 1.2rem; border-top: 1px solid var(--rule); font-size: 0.85rem; color: var(--muted); }
+
+/* Course index */
+ol.syllabus { padding-left: 1.4rem; }
+ol.syllabus li { margin: 0 0 0.9rem; }
+ol.syllabus .soon { color: var(--muted); }
+ol.syllabus .tag { font-size: 0.75rem; color: var(--muted); }
+
+/* Lesson diagrams: inline SVG skinned by these classes so light and dark both work.
+   Wide diagrams scroll sideways inside the figure instead of shrinking their labels. */
+figure.diagram { margin: 2rem 0 2.2rem; }
+figure.diagram .scroll { overflow-x: auto; }
+figure.diagram svg { display: block; width: 100%; min-width: 620px; height: auto; }
+figure.diagram figcaption { font-size: 0.85rem; color: var(--muted); margin-top: 0.6rem; }
+.dg text { font-family: var(--sans); }
+.dg .mono { font-family: var(--mono); }
+.dg rect.hit { fill: transparent; }
+/* Labels and their masks never block a tap on the part underneath. */
+.dg text, .dg rect.f-paper { pointer-events: none; }
+.dg .t-ink { fill: var(--ink); }
+.dg .t-muted { fill: var(--muted); }
+.dg .t-acc { fill: var(--accent); }
+.dg .f-paper { fill: var(--bg); }
+.dg .f-soft { fill: var(--note-bg); }
+.dg .f-tint { fill: var(--accent-tint); }
+.dg .f-muted { fill: var(--muted); }
+.dg .f-acc { fill: var(--accent); }
+.dg .s-ink { stroke: var(--ink); fill: none; }
+.dg .s-muted { stroke: var(--muted); fill: none; }
+.dg .s-acc { stroke: var(--accent); fill: none; }
+.dg .s-rule { stroke: var(--rule); fill: none; }
+.dg rect.box { fill: var(--bg); stroke: var(--ink); stroke-width: 1; }
+.dg rect.box.ext { fill: var(--note-bg); stroke: var(--rule); }
+.dg rect.box.focal { fill: var(--accent-tint); stroke: var(--accent); }
+
+/* Spot quiz: tap a part of the diagram */
+.quiz.spot g[data-spot] { cursor: pointer; }
+.quiz.spot g[data-spot]:hover rect.box, .quiz.spot g[data-spot]:focus rect.box { stroke-width: 2; }
+.quiz.spot g[data-spot]:focus { outline: none; }
+.quiz.spot g[data-spot].right rect.box { stroke: var(--good); stroke-width: 2; fill: var(--good-bg); }
+.quiz.spot g[data-spot].wrong rect.box { stroke: var(--bad); stroke-width: 2; fill: var(--bad-bg); }
+.quiz.spot g[data-spot]:hover rect.hit { fill: var(--note-bg); }
+.quiz.spot g[data-spot].right rect.hit { fill: var(--good-bg); }
+.quiz.spot g[data-spot].wrong rect.hit { fill: var(--bad-bg); }
+
+@media print {
+  :root { --bg: #fff; --ink: #000; }
+  nav.course, .quiz button.act { display: none; }
+  .quiz .model, .quiz .fb { display: block; }
+  main { max-width: none; padding: 0; }
+  pre { white-space: pre-wrap; }
+}
