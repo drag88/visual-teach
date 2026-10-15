@@ -6,6 +6,9 @@
 //     <p class="fb">Why the right answer is right.</p></div>
 // Recall (write first, then compare):
 //   <div class="quiz recall"><p class="q">Prompt</p><div class="model">Model answer</div></div>
+// Predict (recall for an outcome: what will this print, what happened next, what does the data show):
+//   <div class="quiz predict"><p class="q">Prompt</p><pre><code>optional code or data</code></pre><div class="model">The real outcome</div></div>
+//   After the reveal, recall and predict ask "I got it" or "I missed it". These marks feed review, not the score.
 // Ordering (list the steps in the correct order; they are shuffled on load):
 //   <div class="quiz order"><p class="q">Prompt</p><ol class="items"><li>First</li><li>Second</li></ol></div>
 // Matching (each item gets a dropdown of every distinct answer, sorted A to Z):
@@ -14,6 +17,13 @@
 //   <div class="quiz spot" data-from="hero-figure-id" data-answer="spot-id"><p class="q">Prompt</p><p class="fb">Why</p></div>
 //   The hero <figure id="hero-figure-id"> wraps each tappable part in <g data-spot="spot-id">.
 // Score line: <p class="score" id="score"></p>
+//
+// Ids: give every quiz id="q-<slug>". Without one it is keyed "k-" plus its question's first six words.
+// Either way the key goes in data-quiz, and lesson.html#<key> scrolls to that quiz and flashes it.
+// Event: each quiz dispatches a bubbling "quiz" CustomEvent with detail {quiz, type, event, right, q, answer, model}.
+//   "answered" on the first check of mcq, order, match and spot (right true or false), and on a self-mark.
+//   "revealed" when recall or predict shows its answer, with the learner's text and the model text, right null.
+// This file never talks to a server; ask.js listens for the event when a server is running.
 
 (function () {
   const shuffle = (a) => {
@@ -32,6 +42,22 @@
     if (el && asked) el.textContent = `${firstTry} of ${asked} right first time`;
   };
 
+  const TYPES = ["mcq", "recall", "predict", "order", "match", "spot"];
+  const question = (quiz) => quiz.querySelector(".q")?.textContent.trim() ?? "";
+  const emit = (quiz, event, right, answer = null, model = null) =>
+    quiz.dispatchEvent(
+      new CustomEvent("quiz", {
+        bubbles: true,
+        detail: { quiz: quiz.dataset.quiz, type: TYPES.find((t) => quiz.classList.contains(t)), event, right, q: question(quiz), answer, model },
+      })
+    );
+
+  // Unicode-aware, so a question in any language still gets a usable key.
+  const slug = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
+  document.querySelectorAll(".quiz").forEach((quiz) => {
+    quiz.dataset.quiz = quiz.id || "k-" + slug(question(quiz).split(/\s+/).slice(0, 6).join(" "));
+  });
+
   document.querySelectorAll(".quiz.mcq").forEach((quiz) => {
     const opts = quiz.querySelector(".opts");
     const buttons = shuffle([...opts.querySelectorAll("button.opt")]);
@@ -45,21 +71,38 @@
         asked++;
         const right = b.hasAttribute("data-right");
         if (right) firstTry++;
+        const correct = buttons.find((x) => x.hasAttribute("data-right"));
         b.classList.add(right ? "right" : "wrong");
-        buttons.find((x) => x.hasAttribute("data-right")).classList.add("right");
+        correct.classList.add("right");
         if (fb) fb.classList.add("show", right ? "ok" : "no");
         updateScore();
+        emit(quiz, "answered", right, b.textContent.trim(), correct.textContent.trim());
       })
     );
   });
 
-  document.querySelectorAll(".quiz.recall").forEach((quiz) => {
+  document.querySelectorAll(".quiz.recall, .quiz.predict").forEach((quiz) => {
+    const predict = quiz.classList.contains("predict");
     const model = quiz.querySelector(".model");
     const box = document.createElement("textarea");
-    box.placeholder = "Write your answer from memory before you reveal.";
+    box.placeholder = predict ? "Write what you expect before you look." : "Write your answer from memory before you reveal.";
     const btn = document.createElement("button");
     btn.className = "act";
-    btn.textContent = "Compare with the answer";
+    btn.textContent = predict ? "Show the real outcome" : "Compare with the answer";
+    // The learner marks their own answer; that feeds review but stays out of the score, which counts only checked answers.
+    const marks = document.createElement("div");
+    marks.className = "marks";
+    [["I got it", true], ["I missed it", false]].forEach(([label, right]) => {
+      const b = document.createElement("button");
+      b.className = "mark";
+      b.textContent = label;
+      b.addEventListener("click", () => {
+        marks.querySelectorAll("button").forEach((x) => (x.disabled = true));
+        b.setAttribute("aria-pressed", "true");
+        emit(quiz, "answered", right, box.value, model.textContent.trim());
+      });
+      marks.appendChild(b);
+    });
     btn.addEventListener("click", () => {
       if (!box.value.trim()) {
         box.focus();
@@ -67,6 +110,8 @@
       }
       model.classList.add("show");
       btn.remove();
+      model.after(marks);
+      emit(quiz, "revealed", null, box.value, model.textContent.trim());
     });
     quiz.insertBefore(box, model);
     quiz.insertBefore(btn, model);
@@ -108,6 +153,7 @@
         asked++;
         if (all) firstTry++;
         updateScore();
+        emit(quiz, "answered", all);
       }
       fb.className = "fb show " + (all ? "ok" : "no");
       fb.textContent = all
@@ -153,6 +199,7 @@
         asked++;
         if (all) firstTry++;
         updateScore();
+        emit(quiz, "answered", all);
       }
       fb.className = "fb show " + (all ? "ok" : "no");
       fb.textContent = all ? "Every match is right." : `${ok} of ${rows.length} right. Fix the red ones and check again.`;
@@ -182,6 +229,7 @@
       parts.filter((x) => x.dataset.spot === quiz.dataset.answer).forEach((x) => x.classList.add("right"));
       fb.classList.add("show", right ? "ok" : "no");
       updateScore();
+      emit(quiz, "answered", right);
     };
     parts.forEach((g) => {
       g.setAttribute("tabindex", "0");
@@ -195,4 +243,16 @@
       });
     });
   });
+
+  // A review link lands on its quiz. A "k-" key is not an element id, so the browser cannot scroll there itself.
+  const land = () => {
+    const key = decodeURIComponent(location.hash.slice(1));
+    const quiz = key && document.querySelector(`.quiz[data-quiz="${CSS.escape(key)}"]`);
+    if (!quiz) return;
+    quiz.scrollIntoView({ block: "center" });
+    quiz.classList.add("flash");
+    quiz.addEventListener("animationend", () => quiz.classList.remove("flash"), { once: true });
+  };
+  land();
+  window.addEventListener("hashchange", land);
 })();

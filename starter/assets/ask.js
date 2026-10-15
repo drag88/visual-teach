@@ -5,13 +5,17 @@
   if (!main) return;
 
   const SKIP = "nav, h1, h2, h3, .subtitle, .src, .score, .read, footer, script, .ask-card";
-  const LABEL = { explain: "Explain", simpler: "Simpler", more: "More", connect: "Connect", ask: "Ask", whole: "Ask" };
+  const LABEL = { explain: "Explain", simpler: "Simpler", more: "More", walk: "Walk through", uses: "Where else",
+    connect: "Connect", ask: "Ask", whole: "Ask", check: "Check" };
+  // A citation: path:12 or path:12-20, as a lesson's .src line and inline code show it.
+  const CITE = /^(\S+?):(\d+)(?:-(\d+))?$/;
   const lesson = decodeURIComponent(location.pathname.replace(/^\/+/, ""));
   const title = (document.querySelector("h1") || document.querySelector("title") || {}).textContent || "";
   const wide = matchMedia("(min-width: 1180px)");
   const narrow = matchMedia("(max-width: 720px), (pointer: coarse)");
   const cards = [];
   let mode = store("vt-mode") || "quick";
+  let code = null; // the source folder answers may read, from ping
 
   const blocks = [...main.children].filter((el) => !el.matches(SKIP));
   blocks.forEach((el, i) => {
@@ -22,13 +26,15 @@
   if (!/^https?:$/.test(location.protocol)) return hint();
   fetch("/api/ping")
     .then((r) => (r.ok ? r.json() : null))
-    .then((info) => (info ? start() : hint()))
+    .then((info) => (info ? start(info) : hint()))
     .catch(hint);
 
   // Setup
 
-  function start() {
+  function start(info) {
+    code = info.code || null;
     document.body.classList.add("ask-on");
+    document.body.classList.toggle("ask-hidden", store("vt-answers") === "hidden");
     buildSelectionBar();
     buildAskBar();
     fetch("/api/threads?lesson=" + encodeURIComponent(lesson)).then((r) => r.json())
@@ -38,7 +44,7 @@
         highlight();
       }).catch(() => {});
     wide.addEventListener("change", () => {
-      cards.forEach((c) => place(c, c.block));
+      cards.filter((c) => !c.closest(".ask-panel")).forEach((c) => place(c, c.block)); // panel answers stay put
       layout();
     });
     addEventListener("resize", scheduleLayout);
@@ -46,6 +52,10 @@
       const chip = e.target.closest(".ask-pchip");
       if (!chip) return;
       e.preventDefault();
+      if (chip.classList.contains("ask-src")) {
+        const card = chip.closest(".ask-card");
+        return openSource(chip.dataset.path, +chip.dataset.start, +chip.dataset.end, card ? card.block : null);
+      }
       const target = main.querySelector(`[data-p="${chip.dataset.p}"]`);
       if (!target) return;
       target.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -53,6 +63,14 @@
       void target.offsetWidth;
       target.classList.add("ask-flash");
     });
+    if (code) {
+      for (const el of main.querySelectorAll(".src")) {
+        const c = citeOf(el);
+        if (c) el.replaceChildren(Object.assign(button(el.textContent.trim(), () => openSource(c.path, c.start, c.end, blockOf(el))), { className: "ask-cite" }));
+      }
+    }
+    document.addEventListener("quiz", onQuiz);
+    if (/^\/(index\.html)?$/.test(location.pathname)) showReview();
   }
 
   let topicsLoaded = false;
@@ -81,7 +99,7 @@
   function buildSelectionBar() {
     selBar = node("div", "ask-sel");
     selBar.hidden = true;
-    for (const kind of ["explain", "simpler", "more", "connect", "ask"]) {
+    for (const kind of ["explain", "simpler", "more", "walk", ...(code ? ["uses"] : []), "connect", "ask"]) {
       const b = node("button");
       b.type = "button";
       b.textContent = kind === "connect" || kind === "ask" ? LABEL[kind] + "…" : LABEL[kind];
@@ -90,12 +108,16 @@
     }
     const form = node("form", "ask-sel-form");
     form.hidden = true;
-    const input = node("input");
-    input.setAttribute("aria-label", "Your question");
+    const input = questionBox("Your question");
+    // Connect picks from the course's topics, and only a one-line input can offer a list (datalist).
+    const topic = node("input");
+    topic.placeholder = "Connect to which topic?";
+    topic.setAttribute("aria-label", topic.placeholder);
+    topic.setAttribute("list", "ask-topics");
     const go = node("button");
     go.type = "submit";
     go.textContent = "Ask";
-    form.append(input, go);
+    form.append(input, topic, go);
     selBar.append(form);
     document.body.append(selBar);
 
@@ -108,26 +130,28 @@
       if (kind === "connect" || kind === "ask") {
         form.hidden = false;
         form.dataset.kind = kind;
-        input.value = "";
-        input.placeholder = kind === "connect" ? "Connect to which topic?" : "Your question";
-        if (kind === "connect") {
-          loadTopics();
-          input.setAttribute("list", "ask-topics");
-        } else input.removeAttribute("list");
-        input.focus();
+        const connect = kind === "connect";
+        input.hidden = connect;
+        topic.hidden = !connect;
+        input.value = topic.value = "";
+        input.style.height = "";
+        if (connect) loadTopics();
+        (connect ? topic : input).focus();
         return;
       }
       submit(kind);
     });
     form.addEventListener("submit", (e) => {
       e.preventDefault();
-      const text = input.value.trim();
+      const text = (form.dataset.kind === "connect" ? topic : input).value.trim();
       if (!text || !pending) return;
       submit(form.dataset.kind, text);
     });
     document.addEventListener("selectionchange", debounce(onSelection, 150));
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") hideSelectionBar();
+      if (e.key !== "Escape") return;
+      if (!selBar.hidden) hideSelectionBar();
+      else if (panel && panel.open) panel.close();
     });
   }
 
@@ -137,15 +161,25 @@
     if (!sel.rangeCount || sel.isCollapsed) return hideSelectionBar();
     const range = sel.getRangeAt(0);
     const start = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
-    const block = start && start.closest("main > [data-p]");
     const text = sel.toString().replace(/\s+/g, " ").trim();
-    if (!block || !text || text.length > 2000 || start.closest(".ask-card")) return hideSelectionBar();
-    pending = { block, text, quote: quoteOf(block, range, text), range: range.cloneRange() };
+    if (!start || !text || text.length > 2000 || start.closest(".ask-card")) return hideSelectionBar();
+    if (start.closest(".ask-lines")) {
+      // In the source panel: the card goes to the lesson block that opened it.
+      pending = { block: panel.block, text, quote: null, range: range.cloneRange(), code: true, source: panelSource(range),
+        inPanel: true };
+      return showSelectionBar(range);
+    }
+    const block = start.closest("main > [data-p]");
+    if (!block) return hideSelectionBar();
+    const pre = start.closest("pre");
+    pending = { block, text, quote: quoteOf(block, range, text), range: range.cloneRange(), code: Boolean(pre),
+      source: pre ? citeOf(pre.nextElementSibling) : null };
     showSelectionBar(range);
   }
 
   function showSelectionBar(range) {
     selBar.querySelector(".ask-sel-form").hidden = true;
+    selBar.querySelector('[data-kind="walk"]').hidden = !pending.code;
     selBar.hidden = false;
     selBar.classList.toggle("docked", narrow.matches);
     if (narrow.matches) {
@@ -166,18 +200,26 @@
   }
 
   function submit(kind, text) {
-    const { block, text: selection, quote, range } = pending;
+    const { block, text: selection, quote, range, source, inPanel } = pending;
     hideSelectionBar();
+    setHidden(false);
     getSelection().removeAllRanges();
     const card = makeCard({ kind, selection, block });
     card.range = range;
     highlight();
     place(card, block);
+    // Asked in the source panel: the answer sits under those lines while the panel is open, since the
+    // panel covers the margin where cards usually go. releaseCards() puts it back beside the lesson.
+    const row = inPanel && source && panel.lines.querySelector(`.ask-line[data-n="${source.end}"]`);
+    if (row) {
+      card.classList.remove("in-margin");
+      row.after(card);
+    }
     layout();
     send(card, {
-      kind, mode, lesson, lesson_title: title, selection,
-      para: { n: +block.dataset.p, key: block.dataset.key, quote },
-      para_text: clip(clean(block.innerText), 1500),
+      kind, mode, lesson, lesson_title: title, selection, source,
+      para: block ? { n: +block.dataset.p, key: block.dataset.key, quote } : null,
+      para_text: block ? clip(clean(block.innerText), 1500) : null,
       question: kind === "ask" ? text : null,
       topic: kind === "connect" ? text : null,
       lesson_text: lessonText(),
@@ -188,9 +230,7 @@
 
   function buildAskBar() {
     const bar = node("form", "ask-bar");
-    const input = node("input");
-    input.placeholder = "Ask about this page";
-    input.setAttribute("aria-label", "Ask about this page");
+    const input = questionBox("Ask about this page");
     const key = node("span", "ask-key");
     key.textContent = "/";
     const modes = node("div", "ask-mode");
@@ -209,28 +249,78 @@
       });
       modes.append(b);
     }
+    showBtn = button("", () => setHidden(!document.body.classList.contains("ask-hidden")));
+    showBtn.className = "ask-show";
+    updateShow();
     const sendBtn = node("button", "ask-send");
     sendBtn.type = "submit";
     sendBtn.textContent = "↑";
     sendBtn.setAttribute("aria-label", "Send");
-    bar.append(input, key, modes, sendBtn);
+    bar.append(input, key, showBtn, modes, sendBtn);
     document.body.append(bar);
     bar.addEventListener("submit", (e) => {
       e.preventDefault();
       const q = input.value.trim();
       if (!q) return;
       input.value = "";
-      const card = makeCard({ kind: "whole", block: null });
-      place(card, null);
+      input.style.height = "";
+      setHidden(false);
+      // Answer beside the paragraph being read, so the learner keeps their place.
+      const block = readingBlock();
+      const card = makeCard({ kind: "whole", block });
+      place(card, block);
       layout();
-      card.scrollIntoView({ behavior: "smooth", block: "center" });
-      send(card, { kind: "whole", mode, lesson, lesson_title: title, question: q, lesson_text: lessonText() }, q);
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      send(card, {
+        kind: "whole", mode, lesson, lesson_title: title, question: q, lesson_text: lessonText(),
+        para: block ? { n: +block.dataset.p, key: block.dataset.key, quote: null } : null,
+      }, q);
     });
     document.addEventListener("keydown", (e) => {
       if (e.key !== "/" || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
       e.preventDefault();
       input.focus();
     });
+  }
+
+  // One switch shows or hides every answer. Hidden is plain reading: no cards or marks, and the text back
+  // in the centre. Asking anything shows them again.
+  let showBtn = null;
+  function setHidden(hidden) {
+    document.body.classList.toggle("ask-hidden", hidden);
+    store("vt-answers", hidden ? "hidden" : "shown");
+    updateShow();
+    highlight();
+    layout();
+  }
+
+  function updateShow() {
+    if (!showBtn) return;
+    showBtn.hidden = !cards.length;
+    showBtn.textContent = document.body.classList.contains("ask-hidden") ? `Show answers (${cards.length})` : "Hide answers";
+  }
+
+  // The paragraph being read: the first one that reaches below the top quarter of the screen.
+  function readingBlock() {
+    return blocks.find((b) => b.getBoundingClientRect().bottom > innerHeight / 4) || blocks[blocks.length - 1] || null;
+  }
+
+  // Question boxes grow with the question, so a long dictated one stays in view. Enter sends; Shift+Enter is a new line.
+  function questionBox(label) {
+    const box = node("textarea");
+    box.rows = 1;
+    box.placeholder = label;
+    box.setAttribute("aria-label", label);
+    box.addEventListener("input", () => {
+      box.style.height = "auto";
+      box.style.height = box.scrollHeight + "px";
+    });
+    box.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+      e.preventDefault();
+      box.form.requestSubmit();
+    });
+    return box;
   }
 
   // Cards
@@ -259,9 +349,7 @@
     const meta = node("span", "ask-meta");
     foot.append(meta, button("Copy", () => copy(card)), button("Retry", () => retry(card)), button("Delete", () => remove(card)));
     const follow = node("form", "ask-follow");
-    const input = node("input");
-    input.placeholder = "Ask a follow-up";
-    input.setAttribute("aria-label", "Ask a follow-up");
+    const input = questionBox("Ask a follow-up");
     const go = node("button");
     go.type = "submit";
     go.textContent = "↑";
@@ -272,11 +360,13 @@
       const q = input.value.trim();
       if (!q || !card.thread) return;
       input.value = "";
+      input.style.height = "";
       send(card, { thread: card.thread, kind: "ask", mode, lesson, question: q }, q);
     });
     card.append(head, log, foot, follow);
     Object.assign(card, { log, meta, block });
     cards.push(card);
+    updateShow();
     return card;
   }
 
@@ -381,6 +471,7 @@
     if (card.thread) post("/api/delete", { thread: card.thread }).catch(() => {});
     cards.splice(cards.indexOf(card), 1);
     card.remove();
+    updateShow();
     if (card.block && !cards.some((c) => c.block === card.block)) card.block.classList.remove("has-ask");
     highlight();
     layout();
@@ -402,7 +493,7 @@
     let ex = null;
     for (const m of t.messages) {
       if (m.role === "user") {
-        const asked = t.kind === "ask" || t.kind === "whole" || t.kind === "connect" || ex;
+        const asked = ["ask", "whole", "connect", "check"].includes(t.kind) || ex;
         ex = exchange(card, asked ? m.text : null);
         ex.status.remove();
       } else if (m.role === "assistant" && ex) {
@@ -425,6 +516,145 @@
     card.querySelector(".ask-toggle").textContent = folded ? "+" : "–";
   }
 
+  // Source panel: the cited file with numbered lines, beside the lesson (a bottom sheet on a phone).
+
+  let panel = null;
+  const REFUSED = { 413: "This file is too large to show.", 415: "This file is not plain text." };
+
+  function openSource(path, from, to, block) {
+    if (!panel) {
+      panel = node("dialog", "ask-panel");
+      panel.setAttribute("aria-label", "Source");
+      const head = node("div", "ask-panel-head");
+      head.append(node("span", "ask-panel-path"), button("Close", () => panel.close()));
+      panel.lines = node("div", "ask-lines");
+      panel.append(head, panel.lines);
+      panel.addEventListener("close", () => {
+        panel.req = null;
+        document.body.classList.remove("ask-panel-open");
+        releaseCards();
+      });
+      document.body.append(panel);
+    }
+    releaseCards();
+    Object.assign(panel, { block, path });
+    panel.querySelector(".ask-panel-path").textContent = `${path}:${from}${to > from ? "-" + to : ""}`;
+    panel.lines.replaceChildren(note("Loading…"));
+    panel.show();
+    document.body.classList.add("ask-panel-open");
+    // As a bottom sheet the panel covers the lower part of the screen, so lift the cited passage above it.
+    if (!wide.matches && block) block.scrollIntoView({ behavior: "smooth", block: "start" });
+    const req = (panel.req = {}); // a reply for a file opened earlier, or after closing, is dropped
+    fetch("/api/source?path=" + encodeURIComponent(path))
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((d) => {
+        if (panel.req !== req) return;
+        panel.path = d.path;
+        const rows = document.createDocumentFragment();
+        d.text.replace(/\r?\n$/, "").split(/\r?\n/).forEach((t, i) => {
+          const row = node("div", "ask-line");
+          row.dataset.n = i + 1;
+          row.textContent = t;
+          if (i + 1 >= from && i + 1 <= to) row.classList.add("cited");
+          rows.append(row);
+        });
+        panel.lines.replaceChildren(rows);
+        const first = panel.lines.children[from - 1];
+        if (first) panel.lines.scrollTop = first.offsetTop - panel.lines.clientHeight / 3;
+      })
+      // A refused or missing file gets one plain line, never its content.
+      .catch((status) => {
+        if (panel.req === req) panel.lines.replaceChildren(note(REFUSED[status] || "This file is not in the source folder, or is private."));
+      });
+  }
+
+  function releaseCards() {
+    const held = [...panel.querySelectorAll(".ask-card")];
+    held.forEach((c) => place(c, c.block));
+    if (held.length) layout();
+  }
+
+  function note(text) {
+    const p = node("p", "ask-panel-note");
+    p.textContent = text;
+    return p;
+  }
+
+  // The lines a panel selection covers. A triple-click ends at the start of the next line.
+  function panelSource(range) {
+    const row = (n) => (n.nodeType === 1 ? n : n.parentElement).closest(".ask-line");
+    const a = row(range.startContainer);
+    let b = row(range.endContainer);
+    if (a && b && b !== a && range.endOffset === 0) b = b.previousElementSibling;
+    return a && b ? { path: panel.path, start: +a.dataset.n, end: +b.dataset.n } : null;
+  }
+
+  function citeOf(el) {
+    const m = el && el.matches(".src") && CITE.exec(el.textContent.trim());
+    return m ? { path: m[1], start: +m[2], end: +(m[3] || m[2]) } : null;
+  }
+
+  // A code block's source line belongs to the code above it.
+  function blockOf(el) {
+    let b = el.closest("main > [data-p]") || el;
+    while (b && !b.matches("main > [data-p]")) b = b.previousElementSibling;
+    return b;
+  }
+
+  // Quizzes: results feed spaced review; a revealed recall answer can be marked by Claude.
+
+  function onQuiz(e) {
+    const d = e.detail || {};
+    const quiz = e.target.closest(".quiz") || e.target;
+    if (d.event === "answered") {
+      post("/api/quiz", { lesson, quiz: d.quiz, type: d.type, q: d.q, right: d.right }).catch(() => {});
+    } else if (d.event === "revealed" && (d.answer || "").trim()) {
+      const old = quiz.querySelector(".ask-check");
+      if (old) old.remove();
+      const b = button("Check my answer", () => {
+        b.remove();
+        checkAnswer(quiz, d);
+      });
+      b.className = "act ask-check";
+      quiz.append(b);
+    }
+  }
+
+  function checkAnswer(quiz, d) {
+    const block = quiz.closest("main > [data-p]");
+    setHidden(false);
+    const card = makeCard({ kind: "check", block });
+    place(card, block);
+    layout();
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    send(card, {
+      kind: "check", mode, lesson, lesson_title: title, quiz: d.quiz, question: d.q, answer: d.answer, model: d.model,
+      para: block ? { n: +block.dataset.p, key: block.dataset.key, quote: null } : null, lesson_text: lessonText(),
+    }, d.answer);
+  }
+
+  function showReview() {
+    const lists = main.querySelectorAll("ol.syllabus");
+    if (!lists.length) return;
+    fetch("/api/review").then((r) => r.json()).then(({ due }) => {
+      const list = node("ul", "ask-review");
+      for (const item of due || []) {
+        const url = new URL(item.href, location.href);
+        if (url.origin !== location.origin) continue;
+        const a = node("a");
+        a.href = url.href;
+        a.textContent = item.q || item.quiz;
+        const li = node("li");
+        li.append(a);
+        list.append(li);
+      }
+      if (!list.children.length) return;
+      const head = node("h2");
+      head.textContent = "Review";
+      lists[lists.length - 1].after(head, list);
+    }).catch(() => {});
+  }
+
   // Where cards go: the right margin on wide screens, under the paragraph otherwise.
 
   function place(card, block) {
@@ -435,7 +665,8 @@
     if (inMargin) main.append(card);
     else if (block) {
       let after = block;
-      while (after.nextElementSibling && after.nextElementSibling.classList.contains("ask-card")) after = after.nextElementSibling;
+      // Past earlier cards, and past a code block's source line so the two stay together.
+      while (after.nextElementSibling && after.nextElementSibling.matches(".ask-card, .src")) after = after.nextElementSibling;
       after.after(card);
     } else {
       const footer = main.querySelector("footer");
@@ -489,7 +720,7 @@
 
   function highlight() {
     if (!window.CSS || !CSS.highlights || typeof Highlight === "undefined") return;
-    const ranges = cards.map((c) => c.range).filter(Boolean);
+    const ranges = document.body.classList.contains("ask-hidden") ? [] : cards.map((c) => c.range).filter(Boolean);
     CSS.highlights.set("asked", new Highlight(...ranges));
   }
 
@@ -542,10 +773,18 @@
     const kept = [];
     const hold = (html) => `\u0000${kept.push(html) - 1}\u0000`;
     const link = (href, text) => hold(`<a href="${esc(href)}" target="_blank" rel="noopener">${esc(text)}</a>`);
+    // path:line[-line] opens the source panel. A path has a dot or a slash, so 10:30 stays a time.
+    const cite = (m, p, a, b) => code && /[./]/.test(p)
+      ? hold(`<a class="ask-pchip ask-src" href="#" data-path="${esc(p)}" data-start="${a}" data-end="${b || a}">${esc(m)}</a>`)
+      : null;
     s = s.replace(/\u0000/g, "")
-      .replace(/`([^`]+)`/g, (_, c) => hold(`<code>${esc(c)}</code>`))
+      .replace(/`([^`]+)`/g, (_, c) => {
+        const m = /^([\w./-]*[\w-]):(\d+)(?:-(\d+))?$/.exec(c);
+        return (m && cite(...m)) || hold(`<code>${esc(c)}</code>`);
+      })
       .replace(/\[([^\]]+)\]\((https?:\/\/[^\s()<>"']+)\)/g, (_, t, u) => link(u, t))
-      .replace(/https?:\/\/[^\s()<>"'`]+/g, (u) => link(u, u));
+      .replace(/https?:\/\/[^\s()<>"'`]+/g, (u) => link(u, u))
+      .replace(/(?<![\w./-])([\w./-]*[\w-]):(\d+)(?:-(\d+))?(?![\w:])/g, (...m) => cite(...m) || m[0]);
     s = esc(s)
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/==([^=]+)==/g, "<mark>$1</mark>")

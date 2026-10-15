@@ -52,12 +52,12 @@ class OpenCourseTest(unittest.TestCase):
         return json.loads((self.ws / ".serve.json").read_text())["pid"]
 
     def test_start_reuse_restart_stop(self):
-        out = self.run_cmd("lessons/x.html", "--port", str(self.port), "--web", "adk.dev")
+        out = self.run_cmd("lessons/x.html", "--port", str(self.port), "--web", "docs.example.org")
         self.assertIn("Started the course server", out)
         self.assertIn(f"http://localhost:{self.port}/lessons/x.html", out)
         first = self.pid()
         saved = json.loads((self.ws / "course.json").read_text())
-        self.assertEqual(saved, {"web": ["adk.dev"], "port": self.port})
+        self.assertEqual(saved, {"web": ["docs.example.org"], "port": self.port})
 
         out = self.run_cmd()
         self.assertIn("Reusing", out, "a second call with no flags reuses the saved settings")

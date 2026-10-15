@@ -57,9 +57,11 @@ def answer_quizzes(pg):
         q.locator("button.act").click()
     for q in pg.locator(".quiz.spot").all():
         q.locator(f'g[data-spot="{q.get_attribute("data-answer")}"]').first.click()
-    for q in pg.locator(".quiz.recall").all():
+    for q in pg.locator(".quiz.recall, .quiz.predict").all():
         q.locator("textarea").fill("answer written from memory")
         q.locator("button.act").click()
+        # Self-marks feed review, not the score, so marking them right must leave the score line alone.
+        q.locator("button.mark", has_text="I got it").click()
     return pg.locator(".quiz").count()
 
 
@@ -85,7 +87,7 @@ def main():
     lessons = sorted(root.glob("lessons/*.html"))
     pages = [p for p in [root / "index.html"] if p.exists()] + lessons + sorted(root.glob("reference/*.html"))
     problems = check_links(pages)
-    problems += [f"{p.name}: does not load ask.js" for p in pages if "ask.js" not in p.read_text()]
+    problems += [f"{p.name}: does not load {js}" for p in pages for js in ("theme.js", "ask.js") if js not in p.read_text()]
     problems += [f"assets/{n} differs from the skill's copy; run sync_course.py" for n in drifted(root)]
 
     with sync_playwright() as p:
@@ -104,7 +106,14 @@ def main():
                 if scheme == "light":
                     n = answer_quizzes(pg)
                     score = pg.locator("#score").inner_text() if pg.locator("#score").count() else ""
-                    graded = n - pg.locator(".quiz.recall").count()
+                    graded = n - pg.locator(".quiz.recall, .quiz.predict").count()
+                    # Review history and links key on the quiz id, so each needs its own.
+                    ids = pg.evaluate("[...document.querySelectorAll('.quiz')].map((q) => q.id)")
+                    if "" in ids:
+                        problems.append(f'{lesson.name}: {ids.count("")} quiz(zes) without an id="q-..."')
+                    dupes = sorted({i for i in ids if i and ids.count(i) > 1})
+                    if dupes:
+                        problems.append(f"{lesson.name}: quiz id used twice: {', '.join(dupes)}")
                     if graded and score != f"{graded} of {graded} right first time":
                         problems.append(f"{lesson.name}: answering every quiz correctly scored '{score}'")
                     for s in long_sentences(pg):
@@ -123,6 +132,9 @@ def main():
             pg.goto(page.as_uri())
             if pg.evaluate("document.documentElement.scrollWidth > window.innerWidth"):
                 problems.append(f"{page.name}: page scrolls sideways at desktop width")
+            hidden = pg.evaluate("[...document.querySelectorAll('main pre')].filter((p) => p.scrollWidth > p.clientWidth + 1).length")
+            if hidden:
+                problems.append(f"{page.name}: {hidden} code block(s) hide long lines behind a sideways scroll")
         browser.close()
 
     if problems:

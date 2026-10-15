@@ -4,12 +4,14 @@ Usage: python3 test_reader.py [screenshot-dir]
 Needs Python Playwright with Chromium. Costs nothing: the fake replays a canned answer.
 """
 
+import json
 import os
 import shutil
 import stat
 import sys
 import tempfile
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -20,15 +22,43 @@ import serve  # noqa: E402
 from test_serve import FAKE_CLAUDE  # noqa: E402
 
 STARTER = HERE.parent / "starter"
-WIDTHS = {"desktop": 1280, "phone": 390}
+WIDTHS = {"desktop": 1280, "big": 1728, "phone": 390}
+SOURCE_WIDTHS = {"phone": 390, "laptop": 1000, "desktop": 1280}  # bottom sheet below 1180, side panel above
+# A dictated question, as long as the ones real learners ask from the bottom bar.
+LONG_QUESTION = ("So does that mean that if the reader comes back to the logbook on a different day it will be a new "
+                 "session, and it will not remember what was said before unless something saved it, and if so where?")
+FILLER = "".join(f"<p>Filler paragraph {i} that gives the lesson enough length to scroll through.</p>\n" for i in range(24))
+# Real code quoted with its citation, a citation to a private file, and a recall quiz.
+EXTRA = """<pre><code>def greet(name):
+    return "hi " + name</code></pre>
+<p class="src">src/app.py:40-41</p>
+<p>Settings come from <code class="src">.env:1</code> when it starts.</p>
+<div class="quiz recall" id="q-greet"><p class="q">What does greet return?</p><div class="model">A greeting with the name added</div></div>
+"""
+ANSWER = "It says hi to the name"
 
 
 def build_workspace(root):
     shutil.copytree(STARTER / "assets", root / "assets")
     (root / "lessons").mkdir()
-    shutil.copy(STARTER / "lesson.html", root / "lessons/0001-lesson.html")
+    lesson = (STARTER / "lesson.html").read_text().replace("<h2>Practice</h2>", FILLER + EXTRA + "<h2>Practice</h2>", 1)
+    (root / "lessons/0001-lesson.html").write_text(lesson)
     shutil.copy(STARTER / "index.html", root / "index.html")
     (root / "NOTES.md").write_text("Analogy: the runner is the office manager.\n")
+
+
+def build_source(root):
+    """A source folder: a 60-line file whose lines 40-41 the lesson quotes, a note, and a secret."""
+    (root / "src").mkdir(parents=True)
+    lines = [f"line_{i} = {i}" for i in range(1, 61)]
+    lines[39:41] = ["def greet(name):", '    return "hi " + name']
+    (root / "src/app.py").write_text("\n".join(lines) + "\n")
+    (root / "notes.md").write_text("Greet is the front desk.\n")
+    (root / ".env").write_text("SECRET=hunter2\n")
+
+
+def last_stdin(log):
+    return [json.loads(line) for line in Path(log).read_text().splitlines() if '"stdin"' in line][-1]["stdin"]
 
 
 def select_words(pg, selector, words):
@@ -67,32 +97,55 @@ def run(width_name, width, base, shots):
         pg.wait_for_selector("body.ask-on")
         para = "main > h2 + p"
         assert pg.locator("main > [data-p]").count() >= 5, "paragraphs are numbered"
+        if pg.locator(".ask-cite").count():
+            problems.append(f"{width_name}: citations became buttons without a source folder")
 
         select_words(pg, para, "explains the diagram")
         pg.wait_for_selector(".ask-sel:not([hidden])")
+        if pg.locator(".ask-sel button:visible", has_text="Where else").count() or pg.locator(".ask-sel button:visible", has_text="Walk through").count():
+            problems.append(f"{width_name}: Where else or Walk through offered on prose without a source folder")
         pg.locator(".ask-sel button", has_text="Explain").click()
         card = pg.locator(".ask-card").first
         card.locator(".ask-answer", has_text="office manager").first.wait_for()
         assert card.locator(".ask-pchip").count() == 1, "¶ citation became a chip"
         if width >= 1180:
             assert "in-margin" in card.get_attribute("class"), "card sits in the margin on wide screens"
+            # Text plus answers fill a wide screen evenly: equal space left and right, nothing off the edge.
+            left = pg.evaluate("document.querySelector('main').getBoundingClientRect().left")
+            box = card.bounding_box()
+            right = width - (box["x"] + box["width"])
+            if right < 0 or abs(left - right) > 48 or max(left, right) > 0.12 * width:
+                problems.append(f"{width_name}: {left:.0f}px empty on the left but {right:.0f}px on the right")
         else:
             assert pg.evaluate(f"document.querySelector('{para}').nextElementSibling.classList.contains('ask-card')"), \
                 "card sits under its paragraph on narrow screens"
         card.locator(".ask-meta", has_text="first words").wait_for()
 
-        card.locator(".ask-follow input").fill("And who is the worker?")
-        card.locator(".ask-follow button").click()
+        card.locator(".ask-follow textarea").fill("And who is the worker?")
+        card.locator(".ask-follow textarea").press("Enter")
         pg.wait_for_function("document.querySelectorAll('.ask-card .ask-ex').length === 2")
         card.locator(".ask-ex").nth(1).locator(".ask-answer", has_text="office manager").wait_for()
 
-        pg.locator(".ask-bar input").fill("What is this lesson about?")
-        pg.locator(".ask-bar .ask-send").click()
+        # A page question asked mid-lesson lands beside the paragraph being read, without jumping the page.
+        pg.evaluate("[...document.querySelectorAll('main > p')].find((p) => p.textContent.includes('Filler paragraph 12'))"
+                    ".scrollIntoView({block: 'start'})")
+        y = pg.evaluate("scrollY")
+        on_screen = pg.evaluate("""[...document.querySelectorAll('main > [data-p]')]
+          .filter((b) => { const r = b.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight; })
+          .map((b) => '¶' + b.dataset.p)""")
+        bar = pg.locator(".ask-bar textarea")
+        bar.fill(LONG_QUESTION)
+        if not bar.evaluate("(el) => el.scrollHeight <= el.clientHeight + 1"):
+            problems.append(f"{width_name}: a long question is cut off in the bottom bar")
+        bar.press("Enter")
         pg.wait_for_function("document.querySelectorAll('.ask-card').length === 2")
-        whole = pg.locator(".ask-card", has=pg.locator(".ask-where", has_text="whole page"))
+        whole = pg.locator(".ask-card", has=pg.locator(".ask-q", has_text="So does that mean"))
         whole.locator(".ask-answer", has_text="office manager").wait_for()
-        assert pg.evaluate("document.querySelector('main footer').previousElementSibling.classList.contains('ask-card')"), \
-            "whole-lesson card sits before the footer"
+        asked_at = whole.locator(".ask-where").inner_text()
+        if asked_at not in on_screen:
+            problems.append(f"{width_name}: page question card sits at {asked_at}, not beside the paragraphs on screen {on_screen}")
+        if abs(pg.evaluate("scrollY") - y) > 450:
+            problems.append(f"{width_name}: asking about the page scrolled away from where the learner was reading")
 
         if pg.evaluate("document.documentElement.scrollWidth > window.innerWidth"):
             problems.append(f"{width_name}: page scrolls sideways")
@@ -104,6 +157,28 @@ def run(width_name, width, base, shots):
         restored = pg.locator(".ask-card", has=pg.locator(".ask-kind", has_text="Explain"))
         assert "folded" in restored.get_attribute("class"), "saved cards come back folded"
         assert restored.locator(".ask-ex").count() == 2, "the follow-up came back with its thread"
+        back = pg.locator(".ask-card", has=pg.locator(".ask-q", has_text="So does that mean")).locator(".ask-where").inner_text()
+        if back != asked_at:
+            problems.append(f"{width_name}: page question came back at {back}, not {asked_at}")
+
+        # One switch hides every answer for plain reading, remembers it, and brings them back.
+        toggle = pg.locator(".ask-show")
+        if toggle.inner_text() != "Hide answers":
+            problems.append(f"{width_name}: the switch reads '{toggle.inner_text()}' while answers show")
+        toggle.click()
+        if pg.locator(".ask-card:visible").count():
+            problems.append(f"{width_name}: Hide answers left cards on screen")
+        pg.reload()
+        pg.wait_for_function("document.querySelectorAll('.ask-card').length === 2")
+        if pg.locator(".ask-card:visible").count() or toggle.inner_text() != "Show answers (2)":
+            problems.append(f"{width_name}: hidden answers did not stay hidden after a reload")
+        if width >= 1180:
+            gap = pg.evaluate("(() => { const r = document.querySelector('main').getBoundingClientRect(); return r.left - (innerWidth - r.right); })()")
+            if abs(gap) > 2:
+                problems.append(f"{width_name}: with answers hidden the text is not centred ({gap:.0f}px off)")
+        toggle.click()
+        if pg.locator(".ask-card:visible").count() != 2:
+            problems.append(f"{width_name}: Show answers did not bring both cards back")
         restored.locator(".ask-toggle").click()
         restored.locator(".ask-foot button", has_text="Delete").click()
         pg.wait_for_function("document.querySelectorAll('.ask-card').length === 1")
@@ -117,6 +192,183 @@ def run(width_name, width, base, shots):
     return problems
 
 
+def check_sources(width_name, width, base, ws, log, shots):
+    """Source panel, Walk through and Where else, answer citations, Check my answer, and review."""
+    problems = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        pg = browser.new_page(viewport={"width": width, "height": 900})
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.goto(f"{base}/lessons/0001-lesson.html")
+        pg.wait_for_selector("body.ask-on")
+        pre_p = pg.evaluate("document.querySelector('main > pre').dataset.p")
+        quiz_p = pg.evaluate("document.querySelector('#q-greet').dataset.p")
+        cited = "[...document.querySelectorAll('.ask-panel[open] .ask-line.cited')].map((l) => +l.dataset.n)"
+
+        select_words(pg, "main > h2 + p", "explains the diagram")
+        pg.wait_for_selector(".ask-sel:not([hidden])")
+        if pg.locator(".ask-sel button:visible", has_text="Walk through").count():
+            problems.append(f"{width_name}: Walk through offered on prose")
+        if not pg.locator(".ask-sel button:visible", has_text="Where else").count():
+            problems.append(f"{width_name}: Where else missing with a source folder")
+        pg.keyboard.press("Escape")
+
+        # A lesson citation opens the file, cited lines tinted and in view.
+        pg.locator("p.src .ask-cite").click()
+        pg.wait_for_selector(".ask-panel[open] .ask-line.cited")
+        if pg.evaluate(cited) != [40, 41]:
+            problems.append(f"{width_name}: citation tinted lines {pg.evaluate(cited)}, not 40-41")
+        tint = pg.evaluate("['.ask-line.cited', '.ask-line:not(.cited)'].map((q) => getComputedStyle(document.querySelector(q)).backgroundColor)")
+        if tint[0] == tint[1]:
+            problems.append(f"{width_name}: cited lines are not tinted")
+        if not pg.evaluate("""(() => { const l = document.querySelector('.ask-line.cited').getBoundingClientRect();
+            const b = document.querySelector('.ask-lines').getBoundingClientRect(); return l.top >= b.top && l.bottom <= b.bottom; })()"""):
+            problems.append(f"{width_name}: the first cited line is not scrolled into view")
+        # Wide screens: the panel fills the space right of the text and covers no lesson line.
+        # Narrower: a bottom sheet, with the lesson readable above it.
+        box = pg.locator(".ask-panel").bounding_box()
+        text_right = pg.evaluate("document.querySelector('main').getBoundingClientRect().right")
+        if width >= 1180 and (box["x"] < text_right - 1 or box["x"] + box["width"] < width - 1 or box["height"] < 899):
+            problems.append(f"{width_name}: panel covers the text or leaves a gap: {box}, text ends at {text_right:.0f}")
+        if width < 1180 and (box["width"] < width - 1 or box["y"] < 900 * 0.3 or box["y"] + box["height"] < 899):
+            problems.append(f"{width_name}: panel is not a bottom sheet: {box}")
+
+        # Highlighting in the panel offers the code actions; Walk through attaches to the quoted code block.
+        select_words(pg, '.ask-line[data-n="40"]', "greet")
+        pg.wait_for_selector(".ask-sel:not([hidden])")
+        for label in ("Walk through", "Where else"):
+            if not pg.locator(".ask-sel button:visible", has_text=label).count():
+                problems.append(f"{width_name}: {label} missing for a selection in the panel")
+        bar, sheet = pg.locator(".ask-sel").bounding_box(), pg.locator(".ask-panel").bounding_box()
+        if width <= 720 and bar["y"] + bar["height"] > sheet["y"]:
+            problems.append(f"{width_name}: the selection bar covers the source sheet")
+        if pg.evaluate("document.documentElement.scrollWidth > window.innerWidth"):
+            problems.append(f"{width_name}: page scrolls sideways with the panel open")
+        if shots:
+            pg.screenshot(path=str(shots / f"reader-panel-{width_name}.png"))
+        os.environ["FAKE_TEXT"] = "Line 40 starts greet, see `src/app.py:40-41` and notes.md:1, like the office manager."
+        pg.locator(".ask-sel button", has_text="Walk through").click()
+        walk = pg.locator(".ask-card", has=pg.locator(".ask-kind", has_text="Walk through"))
+        walk.locator(".ask-meta", has_text="first words").wait_for()
+        if walk.locator(".ask-where").inner_text() != "¶" + pre_p:
+            problems.append(f"{width_name}: walk card sits at {walk.locator('.ask-where').inner_text()}, not the code block ¶{pre_p}")
+        if 'lines 40-40 of src/app.py' not in last_stdin(log):
+            problems.append(f"{width_name}: Claude was not told the highlighted lines and path")
+        # The answer sits under the asked lines inside the panel, not hidden behind it, and goes back
+        # beside its lesson block when the panel closes.
+        if not walk.evaluate("(c) => Boolean(c.closest('.ask-panel')) && c.previousElementSibling.dataset.n === '40'"):
+            problems.append(f"{width_name}: walk answer is not under line 40 in the panel")
+        pg.keyboard.press("Escape")
+        if pg.locator(".ask-panel[open]").count():
+            problems.append(f"{width_name}: Escape did not close the panel")
+        try:  # the dialog's close event comes a moment after Escape
+            pg.wait_for_function("[...document.querySelectorAll('main .ask-card .ask-kind')].some((k) => k.textContent === 'Walk through')",
+                                 timeout=3000)
+        except Exception:
+            problems.append(f"{width_name}: walk answer did not return to the lesson when the panel closed")
+
+        # A citation in an answer opens the panel too.
+        if walk.locator(".ask-answer .ask-src").count() != 2:
+            problems.append(f"{width_name}: answer citations did not become links")
+        walk.locator(".ask-answer .ask-src").first.click()
+        pg.wait_for_selector(".ask-panel[open] .ask-line.cited")
+        if pg.evaluate(cited) != [40, 41]:
+            problems.append(f"{width_name}: answer citation tinted lines {pg.evaluate(cited)}, not 40-41")
+        pg.locator(".ask-panel-head button", has_text="Close").click()
+
+        # Highlighting in the lesson's quoted code sends its citation along.
+        select_words(pg, "main > pre", "return")
+        pg.wait_for_selector(".ask-sel:not([hidden])")
+        if not pg.locator(".ask-sel button:visible", has_text="Walk through").count():
+            problems.append(f"{width_name}: Walk through missing for a selection in code")
+        pg.locator(".ask-sel button", has_text="Where else").click()
+        pg.locator(".ask-card", has=pg.locator(".ask-kind", has_text="Where else")).locator(".ask-meta", has_text="first words").wait_for()
+        if "of src/app.py" not in last_stdin(log):
+            problems.append(f"{width_name}: a selection in quoted code did not name its source")
+
+        # A private file shows one plain line and none of its content.
+        pg.locator("code.src .ask-cite").click()
+        pg.locator(".ask-panel[open] .ask-panel-note", has_text="not in the source folder").wait_for()
+        if pg.locator(".ask-line").count() or "hunter2" in pg.locator(".ask-panel").inner_text():
+            problems.append(f"{width_name}: a private file's content reached the panel")
+        pg.locator(".ask-panel-head button", has_text="Close").click()
+
+        # Quiz results are posted; a revealed recall answer can be checked by Claude.
+        quiz_event = """([event, detail]) => document.querySelector('#q-greet').dispatchEvent(new CustomEvent('quiz',
+            {bubbles: true, detail: {quiz: 'q-greet', type: 'recall', q: 'What does greet return?', event, ...detail}}))"""
+        with pg.expect_response(lambda r: r.url.endswith("/api/quiz")) as posted:
+            pg.evaluate(quiz_event, ["answered", {"right": True}])
+        if not posted.value.ok or '"q-greet"' not in (ws / "quiz.jsonl").read_text():
+            problems.append(f"{width_name}: a quiz result was not saved")
+        os.environ["FAKE_TEXT"] = "Nearly. The office manager would add the greeting."
+        pg.evaluate(quiz_event, ["revealed", {"right": None, "answer": ANSWER, "model": "A greeting with the name added"}])
+        pg.locator("#q-greet .ask-check").click()
+        check = pg.locator(".ask-card", has=pg.locator(".ask-kind", has_text="Check"))
+        check.locator(".ask-meta", has_text="first words").wait_for()
+        stdin = last_stdin(log)
+        if ANSWER not in stdin or "A greeting with the name added" not in stdin:
+            problems.append(f"{width_name}: the check did not send the answer and the right answer")
+        if check.locator(".ask-where").inner_text() != "¶" + quiz_p or check.locator(".ask-q").inner_text() != ANSWER:
+            problems.append(f"{width_name}: the check card is not at the quiz or does not show the answer")
+
+        pg.reload()
+        pg.wait_for_function("document.querySelectorAll('.ask-card').length === 3")
+        if check.locator(".ask-q").inner_text() != ANSWER:
+            problems.append(f"{width_name}: the check card came back without the learner's answer")
+
+        # Review findings: a late reply for an earlier file must not replace the open one; widening the
+        # window keeps a panel answer in the panel; Connect keeps its topic list; a dark page prints light.
+        held = []
+        late = lambda url: "path=.env" in url  # noqa: E731
+        pg.route(late, lambda route: held.append(route))
+        pg.locator(".ask-cite", has_text=".env:1").click()
+        pg.locator(".ask-cite", has_text="src/app.py").click()
+        pg.wait_for_selector(".ask-panel[open] .ask-line.cited")
+        held[0].continue_()
+        pg.wait_for_timeout(400)
+        if pg.locator(".ask-panel[open] .ask-line.cited").count() != 2:
+            problems.append(f"{width_name}: a late reply for an earlier file replaced the open one")
+            pg.locator(".ask-cite", has_text="src/app.py").click()
+            pg.wait_for_selector(".ask-panel[open] .ask-line.cited")
+        pg.unroute(late)
+        if width < 1180:
+            select_words(pg, '.ask-line[data-n="41"]', "return")
+            pg.locator(".ask-sel button", has_text="Walk through").click()
+            pg.wait_for_function("Boolean(document.querySelector('.ask-panel .ask-card'))")
+            pg.set_viewport_size({"width": 1280, "height": 900})
+            pg.wait_for_timeout(400)
+            if not pg.evaluate("Boolean(document.querySelector('.ask-panel[open] .ask-card'))"):
+                problems.append(f"{width_name}: widening the window moved a panel answer behind the panel")
+            pg.set_viewport_size({"width": width, "height": 900})
+        pg.locator(".ask-panel-head button", has_text="Close").click()
+        select_words(pg, "main > h2 + p", "explains")
+        pg.wait_for_selector(".ask-sel:not([hidden])")
+        pg.locator(".ask-sel button", has_text="Connect").click()
+        field = pg.evaluate("[document.activeElement.tagName, document.activeElement.getAttribute('list')]")
+        if field != ["INPUT", "ask-topics"]:
+            problems.append(f"{width_name}: Connect lost its topic suggestions ({field})")
+        pg.keyboard.press("Escape")
+        pg.evaluate("document.documentElement.dataset.theme = 'dark'")
+        pg.emulate_media(media="print")
+        printed = pg.evaluate("getComputedStyle(document.querySelector('main pre')).backgroundColor")
+        pg.emulate_media(media="screen")
+        if printed != "rgb(245, 245, 245)":
+            problems.append(f"{width_name}: a dark page prints code on {printed}")
+
+        # A missed question that is due shows on the course index.
+        pg.goto(f"{base}/")
+        pg.wait_for_selector("body.ask-on")
+        pg.wait_for_selector("ol.syllabus ~ .ask-review a")
+        links = pg.locator(".ask-review a")
+        if links.count() != 1 or not links.first.get_attribute("href").endswith("/lessons/0001-lesson.html#q-old"):
+            problems.append(f"{width_name}: review list is not the one due question")
+        problems += [f"{width_name}: script error: {e}" for e in errors]
+        browser.close()
+    os.environ.pop("FAKE_TEXT", None)
+    return problems
+
+
 # Answers come from a model that may have read hostile text (a fetched page, a code comment), so they
 # must render as text and plain links only, whatever they contain.
 HOSTILE = "\n\n".join([
@@ -124,6 +376,7 @@ HOSTILE = "\n\n".join([
     "[click](javascript:window.pwned=1) and [x](https://a.com/\"onmouseover=\"window.pwned=1)",
     "==<img src=x onerror=window.pwned=1>== and `<script>window.pwned=1</script>`",
     "**[a](https://b.com/(https://c.com/onmouseover=window.pwned=1//)**",
+    "See lessons/x.html:3 and `a.py:1`, which stay text without a source folder.",
 ])
 
 
@@ -134,7 +387,7 @@ def check_answers_are_inert(base):
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
         pg.goto(f"{base}/lessons/0001-lesson.html")
         pg.wait_for_selector("body.ask-on")
-        pg.locator(".ask-bar input").fill("Anything")
+        pg.locator(".ask-bar textarea").fill("Anything")
         pg.locator(".ask-bar .ask-send").click()
         pg.locator(".ask-card .ask-meta", has_text="first words").wait_for()
         for link in pg.locator(".ask-answer a").all():
@@ -152,6 +405,33 @@ def check_answers_are_inert(base):
           return out;
         }""")
         problems += [f"hostile answer: {b}" for b in bad]
+        if pg.locator(".ask-src").count():
+            problems.append("answer citations became links without a source folder")
+        browser.close()
+    return problems
+
+
+def check_theme(base):
+    """The theme switch flips light and dark whatever the system says, and remembers the choice."""
+    problems = []
+    bg = "getComputedStyle(document.body).backgroundColor"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        url = f"{base}/lessons/0001-lesson.html"
+        system = {}
+        for scheme in ("light", "dark"):
+            ctx = browser.new_context(color_scheme=scheme)
+            pg = ctx.new_page()
+            pg.goto(url)
+            system[scheme] = pg.evaluate(bg)
+            pg.locator(".theme-toggle").click()
+            flipped = pg.evaluate(bg)
+            pg.reload()
+            if flipped == system[scheme] or pg.evaluate(bg) != flipped:
+                problems.append(f"theme: on a {scheme} system the switch does not flip and stay flipped")
+            ctx.close()
+        if system["light"] == system["dark"]:
+            problems.append("theme: with no choice made, the page ignores the system's light or dark setting")
         browser.close()
     return problems
 
@@ -180,6 +460,22 @@ def main():
             finally:
                 server.shutdown()
                 server.server_close()
+        for name in SOURCE_WIDTHS:
+            ws = tmp / f"src-{name}"
+            ws.mkdir()
+            build_workspace(ws)
+            build_source(tmp / f"code-{name}")
+            missed = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+            (ws / "quiz.jsonl").write_text(json.dumps({"t": missed, "lesson": "lessons/0001-lesson.html", "quiz": "q-old",
+                                                       "type": "mcq", "q": "Which part does the work?", "right": False}) + "\n")
+            server = serve.make_server(ws, port=0, code=tmp / f"code-{name}", claude=str(fake))
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                problems += check_sources(name, SOURCE_WIDTHS[name], f"http://localhost:{server.server_address[1]}", ws,
+                                          tmp / "claude.log", shots)
+            finally:
+                server.shutdown()
+                server.server_close()
         ws = tmp / "hostile"
         ws.mkdir()
         build_workspace(ws)
@@ -188,6 +484,7 @@ def main():
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             problems += check_answers_are_inert(f"http://localhost:{server.server_address[1]}")
+            problems += check_theme(f"http://localhost:{server.server_address[1]}")
         finally:
             os.environ.pop("FAKE_TEXT", None)
             server.shutdown()
@@ -195,7 +492,8 @@ def main():
     if problems:
         print("\n".join(problems))
         sys.exit(1)
-    print("ok: highlight, stream, follow-up, whole-page ask, reload and delete at", ", ".join(WIDTHS), "+ hostile answers render inert")
+    print("ok: highlight, stream, follow-up, whole-page ask, reload and delete at", ", ".join(WIDTHS),
+          "+ source panel, code actions, Check my answer and review at " + ", ".join(SOURCE_WIDTHS) + " + hostile answers render inert + theme switch")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@
 <title>Lesson Title</title>
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="stylesheet" href="../assets/ask.css">
+<script src="../assets/theme.js"></script>
 </head>
 <body>
 <main>
@@ -47,14 +48,18 @@
 <h2>Walk the picture</h2>
 <p>Prose that explains the diagram part by part, with a citation for each claim.</p>
 
+<!-- Only when the learner has a system of their own: what is specific to it. Everything else stays portable.
+     Cite their sources as <code class="src">path:12</code>, or <p class="src">path:12-20</p> under a code block. -->
+<div class="yours"><b>In your case</b>Where this idea shows up in the learner's own system.</div>
+
 <h2>Practice</h2>
 
-<div class="quiz spot" data-from="hero-figure" data-answer="step">
+<div class="quiz spot" id="q-tap-the-step" data-from="hero-figure" data-answer="step">
   <p class="q">Tap the part that does the work.</p>
   <p class="fb">Why that part, in one or two sentences.</p>
 </div>
 
-<div class="quiz mcq">
+<div class="quiz mcq" id="q-needs-recall">
   <p class="q">A question that needs recall, not recognition.</p>
   <div class="opts">
     <button class="opt" data-right>The right answer in six words</button>
@@ -62,6 +67,12 @@
     <button class="opt">Another plausible wrong one, six words</button>
   </div>
   <p class="fb">Why the right answer is right.</p>
+</div>
+
+<div class="quiz predict" id="q-predict-outcome">
+  <p class="q">Before you look: what do you expect to happen?</p>
+  <pre><code>The code, data or situation to predict from.</code></pre>
+  <div class="model">The real outcome, taken from running it or from the source.</div>
 </div>
 
 <p class="score" id="score"></p>

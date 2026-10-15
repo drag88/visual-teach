@@ -1,40 +1,31 @@
 /* Shared stylesheet for every visual-teach course. Minimal: Helvetica, white, hairlines, one accent. */
 
+/* Each colour is light-dark(light value, dark value). The system's setting picks one, unless theme.js has
+   set data-theme from the learner's switch. */
 :root {
-  --bg: #ffffff;
-  --ink: #111111;
-  --muted: #737373;
-  --rule: #e6e6e6;
-  --accent: #2b59c3;
-  --accent-tint: rgba(43, 89, 195, 0.08);
-  --code-bg: #f5f5f5;
-  --note-bg: #f7f7f7;
-  --good: #1e7a3c;
-  --good-bg: #eef7f1;
-  --bad: #c62828;
-  --bad-bg: #fdeeee;
+  color-scheme: light dark;
+  --bg: light-dark(#ffffff, #0f0f0f);
+  --ink: light-dark(#111111, #ededed);
+  --muted: light-dark(#737373, #8f8f8f);
+  --rule: light-dark(#e6e6e6, #262626);
+  --accent: light-dark(#2b59c3, #7ea2ff);
+  --accent-tint: light-dark(rgba(43, 89, 195, 0.08), rgba(126, 162, 255, 0.12));
+  --code-bg: light-dark(#f5f5f5, #1a1a1a);
+  --note-bg: light-dark(#f7f7f7, #171717);
+  --good: light-dark(#1e7a3c, #7fd19b);
+  --good-bg: light-dark(#eef7f1, #13261a);
+  --bad: light-dark(#c62828, #ff8a80);
+  --bad-bg: light-dark(#fdeeee, #2a1414);
   --sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0f0f0f;
-    --ink: #ededed;
-    --muted: #8f8f8f;
-    --rule: #262626;
-    --accent: #7ea2ff;
-    --accent-tint: rgba(126, 162, 255, 0.12);
-    --code-bg: #1a1a1a;
-    --note-bg: #171717;
-    --good: #7fd19b;
-    --good-bg: #13261a;
-    --bad: #ff8a80;
-    --bad-bg: #2a1414;
-  }
-}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
-html { font-size: 17px; }
+/* Type grows a little on big screens (17px up to 19px), so the page fills them without stretching lines
+   past about 75 characters, the most an eye reads comfortably. */
+html { font-size: clamp(17px, 12px + 0.4vw, 19px); }
 body {
   margin: 0;
   background: var(--bg);
@@ -45,6 +36,13 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 main { max-width: 40rem; margin: 0 auto; padding: 3.5rem 1.25rem 5rem; }
+
+/* Light or dark switch (theme.js), top right of every page */
+.theme-toggle {
+  position: absolute; top: 1rem; right: 1.25rem; z-index: 5;
+  font: inherit; font-size: 0.78rem; color: var(--muted); background: none; border: 0; padding: 0.2rem 0; cursor: pointer;
+}
+.theme-toggle:hover, .theme-toggle:focus-visible { color: var(--ink); }
 
 nav.course { font-size: 0.78rem; color: var(--muted); display: flex; gap: 1.2rem; flex-wrap: wrap; margin-bottom: 3rem; }
 nav.course a { color: var(--muted); text-decoration: none; }
@@ -60,17 +58,18 @@ a:hover { text-decoration-color: var(--ink); }
 strong { font-weight: 600; }
 
 code, pre { font-family: var(--mono); font-size: 0.82em; font-variant-ligatures: none; }
-pre { background: var(--code-bg); padding: 1rem 1.1rem; overflow-x: auto; line-height: 1.5; margin: 1.2rem 0 0.4rem; }
+/* Long code lines wrap rather than hide behind a sideways scroll, so the whole line is always in view. */
+pre { background: var(--code-bg); padding: 1rem 1.1rem; line-height: 1.5; margin: 1.2rem 0 0.4rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 pre code { font-size: 1em; }
 pre .hl { background: var(--accent-tint); }
-@media (max-width: 640px) { pre { white-space: pre-wrap; overflow-wrap: anywhere; } }
 .src { font-size: 0.72rem; color: var(--muted); margin: 0 0 1.4rem; font-family: var(--mono); }
 
 .win { margin: 0 0 3rem; }
-.win b { display: block; font-size: 0.78rem; font-weight: 500; color: var(--muted); margin-bottom: 0.2rem; }
+/* The part that applies only to this learner's own case; everything outside it is portable. */
+.yours { margin: 1.6rem 0; }
+.win b, .yours b, .read b { display: block; font-size: 0.78rem; font-weight: 500; color: var(--muted); margin-bottom: 0.2rem; }
 .aside { color: var(--muted); margin: 1.6rem 0; }
 .read { border-top: 1px solid var(--rule); padding: 1.2rem 0 0; margin: 3rem 0 2rem; }
-.read b { display: block; font-size: 0.78rem; font-weight: 500; color: var(--muted); margin-bottom: 0.2rem; }
 
 table { border-collapse: collapse; width: 100%; font-size: 0.88rem; margin: 1.2rem 0 1.8rem; }
 th, td { text-align: left; vertical-align: top; padding: 0.55rem 0.6rem 0.55rem 0; border-bottom: 1px solid var(--rule); }
@@ -117,6 +116,18 @@ ol.turn .who { font-family: var(--mono); font-size: 0.7rem; color: var(--muted);
 }
 .quiz .model { display: none; margin-top: 0.9rem; padding: 0.8rem 1rem; background: var(--note-bg); font-size: 0.92rem; }
 .quiz .model.show { display: block; }
+.quiz pre { margin: 0 0 0.9rem; }
+.quiz .marks { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.7rem; }
+.quiz button.mark {
+  font: inherit; font-size: 0.85rem; padding: 0.45rem 0.9rem; cursor: pointer;
+  color: var(--ink); background: transparent; border: 1px solid var(--rule); border-radius: 2px;
+}
+.quiz button.mark:hover:enabled { border-color: var(--muted); }
+.quiz button.mark:disabled { cursor: default; color: var(--muted); }
+.quiz button.mark[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); }
+/* A review link landed here: a brief tint says which question it meant, then fades. */
+.quiz.flash { animation: quiz-flash 2s ease-out; }
+@keyframes quiz-flash { from { background: var(--accent-tint); } }
 .quiz .order-row { display: grid; grid-template-columns: 3.4rem 1fr; gap: 0.6rem; align-items: center; padding: 0.35rem 0; font-size: 0.92rem; }
 .quiz select { font: inherit; font-size: 0.9rem; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 2px; padding: 0.25rem; }
 .quiz .order-row.right select { border-color: var(--good); background: var(--good-bg); }
@@ -172,9 +183,8 @@ figure.diagram figcaption { font-size: 0.85rem; color: var(--muted); margin-top:
 .quiz.spot g[data-spot].wrong rect.hit { fill: var(--bad-bg); }
 
 @media print {
-  :root { --bg: #fff; --ink: #000; }
-  nav.course, .quiz button.act { display: none; }
+  :root, :root[data-theme] { color-scheme: light; --bg: #fff; --ink: #000; }
+  nav.course, .quiz button.act, .quiz .marks, .theme-toggle { display: none; }
   .quiz .model, .quiz .fb { display: block; }
   main { max-width: none; padding: 0; }
-  pre { white-space: pre-wrap; }
 }

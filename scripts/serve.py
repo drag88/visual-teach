@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -45,9 +45,18 @@ KIND_TASK = {
                "If a lesson in this course covers that topic, name it.",
     "ask": "Answer the question about the highlighted passage.",
     "whole": "Answer the question about the whole lesson.",
+    "walk": "Walk through the highlighted lines in order, one step per line or statement, saying what each does "
+            "in plain words. At most eight steps.",
+    "uses": "Search the source folder for where the highlighted name or phrase is defined and where else it is "
+            "used or mentioned. List up to eight places as path:line, most important first, a few plain words each.",
+    "check": "The learner answered from memory. Mark it against the right answer and the lesson: start with Right, "
+             "Nearly or Not yet, then say what they got right, what they missed, and if wrong where their thinking "
+             "went off. Under 120 words.",
 }
 READ_TOOLS = ["Read", "Grep", "Glob"]
 MAX_BODY = 1_000_000
+MAX_SOURCE = 512_000
+REVIEW_DAYS = (1, 3, 7)  # wait after a miss, by rights in a row since it; the third right retires the question
 COOKIE = "vt_k"
 
 
@@ -70,28 +79,32 @@ class Course:
         self.code = Path(code).resolve() if code else None
         self.claude = claude
         self.web = list(web or [])
+        self.git = shutil.which("git")
         self.log = self.ws / "questions.jsonl"
+        self.quiz_log = self.ws / "quiz.jsonl"
         self.lock = threading.Lock()
         self.busy = set()  # threads with an answer still streaming
         self.live = set()  # running claude processes, stopped if the server stops
 
     # Question log
 
-    def append(self, record):
-        with self.lock, self.log.open("a") as f:
+    def append(self, record, log=None):
+        with self.lock, (log or self.log).open("a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    def records(self):
+    def records(self, log=None):
         with self.lock:
-            text = read_text(self.log)
+            text = read_text(log or self.log)
         out = []
         for line in text.split("\n"):  # not splitlines(): answers may hold U+2028 and friends
             if not line.strip():
                 continue
             try:
-                out.append(json.loads(line))
+                rec = json.loads(line)
             except ValueError:
                 continue
+            if isinstance(rec, dict):
+                out.append(rec)
         return out
 
     def threads(self, lesson=None):
@@ -147,13 +160,22 @@ class Course:
         if kind == "connect" and q.get("topic"):
             lines.append(f"Topic to connect to: {q['topic']}")
         para = q.get("para") or {}
-        if q.get("selection"):
+        src = q.get("source")
+        if src:
+            lines.append(f'Highlighted lines {src.get("start")}-{src.get("end") or src.get("start")} '
+                         f'of {src.get("path")}: "{q.get("selection") or ""}"')
+        elif q.get("selection"):
             where = f" (in ¶{para['n']})" if para.get("n") else ""
             lines.append(f'Highlighted text{where}: "{q["selection"]}"')
+        elif para.get("n") and not follow_up:
+            lines.append(f"The learner was reading ¶{para['n']} when they asked.")
         if q.get("para_text") and not follow_up:
             lines.append(f"That paragraph: {q['para_text']}")
         if q.get("question"):
             lines.append(f"Question: {q['question']}")
+        if kind == "check":
+            lines.append(f"Learner's answer: {q.get('answer') or ''}")
+            lines.append(f"Right answer: {q.get('model') or ''}")
         if q.get("lesson_text") and not follow_up:
             lines.append(f"The lesson, paragraph by paragraph:\n{q['lesson_text']}")
         return "\n\n".join(lines)
@@ -258,6 +280,8 @@ class Course:
 
     def ask(self, q, send, gone=lambda: False):
         kind = q.get("kind")
+        if not isinstance(q.get("source"), dict):
+            q["source"] = None
         tier = "quick" if kind in ALWAYS_QUICK else (q.get("mode") if q.get("mode") in TIERS else "quick")
         thread = q.get("thread")
         session = self.last_session(thread) if thread else None
@@ -278,9 +302,13 @@ class Course:
     def answer(self, q, send, gone, kind, tier, thread, session, follow_up):
         history = self.history(thread) if follow_up else ""
         prompt = self.user_prompt(q, follow_up)
-        self.append({"t": now(), "thread": thread, "lesson": q.get("lesson"), "kind": kind, "mode": tier,
-                     "topic": q.get("topic"), "anchor": q.get("para"), "selection": q.get("selection"),
-                     "role": "user", "text": q.get("question") or KIND_TASK[kind]})
+        record = {"t": now(), "thread": thread, "lesson": q.get("lesson"), "kind": kind, "mode": tier,
+                  "topic": q.get("topic"), "anchor": q.get("para"), "selection": q.get("selection"),
+                  "source": q.get("source"), "role": "user",
+                  "text": q.get("answer") or q.get("question") or KIND_TASK[kind]}
+        if kind == "check":
+            record["quiz"] = q.get("quiz")
+        self.append(record)
 
         resumed = bool(session)
         session = session or str(uuid.uuid4())
@@ -315,6 +343,79 @@ class Course:
             out.append({"title": html.unescape(title).strip(), "href": href.group(1) if href else None,
                         "tags": html.unescape(tags.group(1)).strip() if tags else ""})
         return out
+
+    # Source files and quiz results
+
+    def source(self, path):
+        """(status, body) for one file in the source folder. Every refusal is the same 404, so a reader
+        cannot tell a hidden or ignored file that exists from one that does not."""
+        if not self.code or not path:
+            return 404, None
+        try:
+            real = (self.code / path).resolve()  # resolve first, so ".." and symlinks are judged by where they land
+            rel = real.relative_to(self.code)
+        except (OSError, RuntimeError, ValueError):  # a NUL byte, a symlink loop, or outside the folder
+            return 404, None
+        if not rel.parts or any(p.startswith(".") for p in rel.parts) or self.ignored(rel) or not real.is_file():
+            return 404, None
+        try:
+            with real.open("rb") as f:
+                raw = f.read(MAX_SOURCE + 1)
+        except OSError:
+            return 404, None
+        if len(raw) > MAX_SOURCE:
+            return 413, None
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return 415, None
+        if "\0" in text:
+            return 415, None
+        return 200, {"path": rel.as_posix(), "text": text}
+
+    def ignored(self, rel):
+        """True when git ignores rel. Ignored files are where secrets and build output live, so when the
+        folder is in a git checkout (its own, or a parent's) and git cannot answer, every file counts as ignored."""
+        if not any((d / ".git").exists() for d in (self.code, *self.code.parents)):
+            return False
+        if not self.git:
+            return True
+        try:
+            done = subprocess.run([self.git, "-C", str(self.code), "check-ignore", "-q", "--", str(rel)],
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return True
+        return done.returncode != 1  # 1 is "not ignored"; 0 is ignored and 128 is an error
+
+    def review(self):
+        """Questions the learner has missed and not yet got right three times running, due ones soonest first."""
+        items = {}
+        for r in self.records(self.quiz_log):
+            key = (r.get("lesson"), r.get("quiz"))
+            if not isinstance(r.get("right"), bool) or not all(isinstance(k, str) for k in key):
+                continue  # null is a reveal with no self-mark yet, so it says nothing about memory
+            item = items.setdefault(key, {"streak": 0, "missed": False})
+            item.update(t=r.get("t"), q=r.get("q"))
+            if r["right"]:
+                item["streak"] += 1
+            else:
+                item.update(streak=0, missed=True)
+        due, waiting, at_now = [], 0, datetime.now(timezone.utc)
+        for (lesson, quiz), item in items.items():
+            if not item["missed"] or item["streak"] >= len(REVIEW_DAYS):
+                continue
+            try:
+                at = datetime.fromisoformat(item["t"]).astimezone() + timedelta(days=REVIEW_DAYS[item["streak"]])
+            except (TypeError, ValueError):
+                continue
+            if at > at_now:
+                waiting += 1
+            else:
+                due.append((at, {"lesson": lesson, "quiz": quiz, "q": item["q"], "href": f"{lesson}#{quiz}",
+                                 "streak": item["streak"]}))
+        due.sort(key=lambda d: d[0])
+        return {"due": [d for _, d in due], "waiting": waiting}
 
 
 def stop_all(course):
@@ -391,7 +492,16 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json({"threads": course.threads(lesson)})
         if url.path == "/api/topics":
             return self.json({"topics": course.topics()})
+        if url.path == "/api/source":
+            status, data = course.source(parse_qs(url.query).get("path", [""])[0])
+            return self.json(data) if status == 200 else self.send_error(status)
+        if url.path == "/api/review":
+            return self.json(course.review())
         super().do_GET()
+
+    def do_HEAD(self):
+        if self.allowed():
+            super().do_HEAD()
 
     def do_POST(self):
         if not self.allowed():
@@ -407,11 +517,20 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
+            body = None
+        if not isinstance(body, dict):
             return self.send_error(400, "Bad JSON")
         course = self.course
         path = urlparse(self.path).path
         if path == "/api/delete":
             course.append({"t": now(), "thread": body.get("thread"), "role": "meta", "event": "deleted"})
+            return self.json({"ok": True})
+        if path == "/api/quiz":
+            if not all(isinstance(body.get(k), str) and body[k] for k in ("lesson", "quiz")):
+                return self.send_error(400, "Needs lesson and quiz")
+            right = body.get("right")
+            course.append({"t": now(), "lesson": body["lesson"], "quiz": body["quiz"], "type": body.get("type"),
+                           "q": body.get("q"), "right": right if isinstance(right, bool) else None}, course.quiz_log)
             return self.json({"ok": True})
         if path != "/api/ask":
             return self.send_error(404)
@@ -444,6 +563,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")  # source files and review state must never sit in a cache
         self.end_headers()
         self.wfile.write(raw)
 

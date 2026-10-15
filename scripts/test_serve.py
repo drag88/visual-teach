@@ -6,6 +6,7 @@ Usage: python3 test_serve.py
 import http.client
 import json
 import os
+import shutil
 import socket
 import stat
 import subprocess
@@ -14,7 +15,9 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -90,7 +93,7 @@ class ServeTest(unittest.TestCase):
 
     def start(self, lan=False):
         self.server = serve.make_server(self.ws, port=0, lan=lan, code=self.code, claude=self.claude,
-                                        web=["adk.dev", "github.com"])
+                                        web=["docs.example.org", "github.com"])
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -170,6 +173,11 @@ class ServeTest(unittest.TestCase):
         self.assertIn("office manager", system)
         self.assertIn("test mission", system)
 
+    def test_page_question_names_the_paragraph_being_read(self):
+        self.ask(kind="whole", selection=None, para_text=None, para={"n": 2, "key": "the-runner", "quote": None})
+        self.assertIn("The learner was reading ¶2 when they asked.", self.calls()[0]["stdin"])
+        self.assertEqual(self.records()[0]["anchor"]["n"], 2, "the card comes back beside that paragraph")
+
     def test_quick_and_deep_models(self):
         self.ask(mode="quick")
         self.ask(mode="deep")
@@ -180,7 +188,7 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(deep[deep.index("--model") + 1], "opus")
         self.assertEqual(deep[deep.index("--effort") + 1], "high")
         self.assertIn("WebFetch", deep)
-        self.assertIn("WebFetch(domain:adk.dev)", deep)
+        self.assertIn("WebFetch(domain:docs.example.org)", deep)
         self.assertNotIn("WebFetch", quick)
         self.assertEqual(simpler[simpler.index("--model") + 1], "sonnet", "simpler always runs quick")
 
@@ -348,6 +356,8 @@ class ServeTest(unittest.TestCase):
         token = self.server.token
         resp, _ = self.request("GET", "/api/ping")
         self.assertEqual(resp.status, 401)
+        resp, _ = self.request("HEAD", "/index.html")
+        self.assertEqual(resp.status, 401, "HEAD is gated like GET")
         resp, _ = self.request("GET", f"/index.html?k={token}")
         self.assertEqual(resp.status, 200)
         cookie = resp.getheader("Set-Cookie").split(";")[0]
@@ -359,6 +369,140 @@ class ServeTest(unittest.TestCase):
         _, events = self.ask()
         status = next(d for k, d in events if k == "status")
         self.assertEqual(status["text"], "Reading ai/agent.py")
+
+    def source(self, path):
+        resp, data = self.request("GET", "/api/source?path=" + quote(str(path)))
+        return resp.status, (json.loads(data) if resp.status == 200 else data)
+
+    def test_source_is_confined(self):
+        (self.code / "app.py").write_text("one\ntwo\nthree\n")
+        status, data = self.source("app.py")
+        self.assertEqual((status, data), (200, {"path": "app.py", "text": "one\ntwo\nthree\n"}))
+        resp, _ = self.request("GET", "/api/source?path=app.py")
+        self.assertEqual(resp.getheader("Cache-Control"), "no-store")
+        self.assertEqual(self.source(self.code / "app.py"), (200, data), "absolute inside the folder")
+        outside = self.ws.parent / "secret.txt"
+        outside.write_text("private")
+        (self.code / "leak.txt").symlink_to(outside)
+        (self.code / "env-link").symlink_to(self.code / ".env")
+        (self.code / ".env").write_text("TOKEN=private")
+        (self.code / "sub").mkdir()
+        refused = ["../secret.txt", "sub/../../secret.txt", str(outside), "leak.txt", ".env", "env-link",
+                   "sub", "missing.py", "", "a\0b"]
+        for path in refused:
+            status, data = self.source(path)
+            self.assertEqual(status, 404, path)
+            self.assertNotIn("private", data, path)
+        (self.code / "bin.dat").write_bytes(b"ok\0ok")
+        (self.code / "latin.txt").write_bytes(b"caf\xe9")
+        self.assertEqual(self.source("bin.dat")[0], 415)
+        self.assertEqual(self.source("latin.txt")[0], 415)
+        (self.code / "big.txt").write_text("x" * 512_001)
+        self.assertEqual(self.source("big.txt")[0], 413)
+        (self.code / ".git").mkdir()
+        self.server.course.git = None
+        self.assertEqual(self.source("app.py")[0], 404, "a git folder without git on PATH refuses everything")
+        (self.code / ".git").rmdir()
+        self.server.course.code = None
+        self.assertEqual(self.source("app.py")[0], 404, "no source folder")
+
+    @unittest.skipUnless(shutil.which("git"), "git is not on PATH")
+    def test_source_refuses_git_ignored(self):
+        subprocess.run(["git", "init", "-q", str(self.code)], check=True)
+        (self.code / ".gitignore").write_text("ignored.txt\nbuild/\n--stdin\n")
+        (self.code / "ignored.txt").write_text("private")
+        (self.code / "build").mkdir()
+        (self.code / "build" / "out.js").write_text("private")
+        (self.code / "--stdin").write_text("private")  # read as an option without "--", git would find nothing ignored
+        (self.code / "app.py").write_text("x = 1\n")
+        self.assertEqual(self.source("app.py")[0], 200)
+        for path in ("ignored.txt", "build/out.js", "--stdin"):
+            status, data = self.source(path)
+            self.assertEqual(status, 404, path)
+            self.assertNotIn("private", data, path)
+
+    @unittest.skipUnless(shutil.which("git"), "git is not on PATH")
+    def test_source_refuses_what_a_parent_repo_ignores(self):
+        # The source folder is often one part of a bigger project, so git's rules come from above it.
+        repo = self.code.parent
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / ".gitignore").write_text("secrets.json\n")
+        (self.code / "secrets.json").write_text("private")
+        (self.code / "app.py").write_text("x = 1\n")
+        self.assertEqual(self.source("app.py")[0], 200)
+        self.assertEqual(self.source("secrets.json")[0], 404)
+
+    def test_check_and_walk_prompts(self):
+        self.ask(kind="check", quiz="q-runner", question="What does the runner do?", answer="It hands out jobs",
+                 model="It schedules work for each agent.", selection=None, para_text=None)
+        stdin = self.calls()[0]["stdin"]
+        self.assertIn(serve.KIND_TASK["check"], stdin)
+        self.assertIn("Question: What does the runner do?", stdin)
+        self.assertIn("Learner's answer: It hands out jobs", stdin)
+        self.assertIn("Right answer: It schedules work for each agent.", stdin)
+        self.ask(kind="walk", mode="deep", question=None, selection="def run():\n    pass",
+                 source={"path": "ai/agent.py", "start": 12, "end": 13})
+        walk = self.calls()[1]
+        self.assertIn('Highlighted lines 12-13 of ai/agent.py: "def run():\n    pass"', walk["stdin"])
+        self.assertNotIn("Highlighted text", walk["stdin"])
+        self.assertEqual(walk["argv"][walk["argv"].index("--model") + 1], "opus", "walk follows the learner's mode")
+        tools = walk["argv"][walk["argv"].index("--tools") + 1:]
+        self.assertEqual(tools[:4], ["Read", "Grep", "Glob", "WebFetch"])
+        records = self.records()
+        self.assertEqual([r["role"] for r in records], ["user", "assistant"] * 2)
+        check, walk_user = records[0], records[2]
+        self.assertEqual((check["kind"], check["quiz"], check["text"], check["source"]),
+                         ("check", "q-runner", "It hands out jobs", None))
+        self.assertEqual(walk_user["source"], {"path": "ai/agent.py", "start": 12, "end": 13})
+        self.assertEqual(walk_user["text"], serve.KIND_TASK["walk"])
+        self.assertNotIn("quiz", walk_user)
+        self.ask(kind="uses", selection="run", source={"path": "ai/agent.py", "start": 12, "end": 12})
+        self.assertIn(serve.KIND_TASK["uses"], self.calls()[2]["stdin"])
+
+    def test_quiz_and_review(self):
+        def post(**fields):
+            body = {"lesson": "lessons/one.html", "quiz": "q-a", "type": "mcq", "q": "A?", "right": False}
+            body.update(fields)
+            return self.request("POST", "/api/quiz", body)
+
+        resp, data = post()
+        self.assertEqual((resp.status, json.loads(data)), (200, {"ok": True}))
+        post(right=None, type="recall")
+        rec = json.loads((self.ws / "quiz.jsonl").read_text().splitlines()[0])
+        self.assertEqual(set(rec), {"t", "lesson", "quiz", "type", "q", "right"})
+        self.assertFalse((self.ws / "questions.jsonl").exists(), "quiz results stay out of questions.jsonl")
+        self.assertEqual(post(quiz=None)[0].status, 400)
+        self.assertEqual(post(lesson="")[0].status, 400)
+        self.assertEqual(self.request("POST", "/api/quiz", {"lesson": "x", "quiz": "q"},
+                                      {"Origin": "https://evil.example"})[0].status, 403)
+        _, data = self.request("GET", "/api/review")
+        self.assertEqual(json.loads(data), {"due": [], "waiting": 1}, "a miss just now waits a day")
+
+        def ago(**kw):
+            return (datetime.now(timezone.utc) - timedelta(**kw)).isoformat()
+
+        def rec(quiz, t, right):
+            return json.dumps({"t": t, "lesson": "lessons/two.html", "quiz": quiz, "type": "mcq",
+                               "q": quiz.upper() + "?", "right": right})
+
+        seeded = [
+            rec("q-b", ago(days=5), False), rec("q-b", ago(days=4), True),  # streak 1, due a day ago
+            rec("q-b", ago(minutes=1), None),  # self-mark pending: ignored, so it does not push q-b back
+            rec("q-a", ago(days=10), False),  # streak 0, due nine days ago
+            rec("q-c", ago(days=30), False), rec("q-c", ago(days=20), True), rec("q-c", ago(days=10), True),
+            rec("q-c", ago(days=2), True),  # three rights since the miss: retired
+            rec("q-d", ago(days=9), True),  # never missed
+            rec("q-e", ago(days=20), False), rec("q-e", ago(days=2), True),  # due tomorrow: waiting
+        ]
+        with (self.ws / "quiz.jsonl").open("a") as f:
+            f.write("not json\n" + "\n".join(seeded) + "\n")
+        _, data = self.request("GET", "/api/review")
+        review = json.loads(data)
+        self.assertEqual(review["due"], [
+            {"lesson": "lessons/two.html", "quiz": "q-a", "q": "Q-A?", "href": "lessons/two.html#q-a", "streak": 0},
+            {"lesson": "lessons/two.html", "quiz": "q-b", "q": "Q-B?", "href": "lessons/two.html#q-b", "streak": 1},
+        ])
+        self.assertEqual(review["waiting"], 2, "lessons/one.html#q-a and q-e")
 
 
 if __name__ == "__main__":

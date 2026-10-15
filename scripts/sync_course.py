@@ -2,7 +2,7 @@
 
 Usage: python3 sync_course.py <workspace>
 
-Copies the skill's shared files (style.css, quiz.js, ask.css, ask.js) into the course's assets/,
+Copies the skill's shared files (style.css, theme.js, quiz.js, ask.css, ask.js) into the course's assets/,
 replacing older copies, and makes every page (index, lessons, reference) load them, plus
 assets/course.css when the course has one. Course-only styling belongs in assets/course.css,
 never in the shared files, so every course keeps the same look and feel.
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent.parent
-SHARED = ["style.css", "quiz.js", "ask.css", "ask.js"]
+SHARED = ["style.css", "theme.js", "quiz.js", "ask.css", "ask.js"]
 PROFILE = Path.home() / ".diagram-design" / "profiles" / "learn.md"
 
 
@@ -34,6 +34,7 @@ def link_assets(page, ws):
     original = html
     sheets = ["style.css", "ask.css"] + (["course.css"] if (ws / "assets" / "course.css").exists() else [])
     tags = [f'<link rel="stylesheet" href="{prefix}assets/{s}">' for s in sheets]
+    tags.append(f'<script src="{prefix}assets/theme.js"></script>')  # in <head>, so the theme is set before paint
     missing = [t for t in tags if t not in html]
     if missing:
         html = html.replace("</head>", "\n".join(missing) + "\n</head>", 1)

@@ -23,7 +23,7 @@ main > .ask-flash { animation: ask-flash 1.4s ease-out; }
 
 /* Hint shown when the lesson is opened without the server */
 .ask-hint { font-family: var(--sans); font-size: 0.72rem; color: var(--muted); margin: 3rem 0 0; text-align: center; }
-@media print { .ask-hint, .ask-bar, .ask-sel { display: none !important; } }
+@media print { .ask-hint, .ask-bar, .ask-sel, .ask-panel { display: none !important; } }
 
 /* Bar that appears over a highlight */
 .ask-sel {
@@ -37,25 +37,32 @@ main > .ask-flash { animation: ask-flash 1.4s ease-out; }
   font: inherit; color: inherit; background: transparent; border: 0; border-radius: 3px;
   padding: 0.3rem 0.55rem; cursor: pointer;
 }
-.ask-sel button:hover, .ask-sel button:focus-visible { background: rgba(255, 255, 255, 0.16); outline: none; }
-.ask-sel-form { display: flex; gap: 0.25rem; flex: 1 1 100%; }
-.ask-sel-form[hidden] { display: none; }
-.ask-sel-form input {
+.ask-sel button:hover, .ask-sel button:focus-visible { background: color-mix(in srgb, var(--bg) 18%, transparent); outline: none; }
+.ask-sel-form { display: flex; gap: 0.25rem; flex: 1 1 100%; align-items: flex-end; }
+.ask-sel-form[hidden], .ask-sel-form [hidden] { display: none; }
+/* Question boxes are textareas that grow with the question (ask.js questionBox). */
+.ask-sel-form textarea, .ask-follow textarea, .ask-bar textarea {
+  resize: none; max-height: 40vh; overflow-y: auto; line-height: 1.4; display: block;
+}
+.ask-sel-form textarea, .ask-sel-form input {
   flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var(--bg);
   border: 0; border-radius: 3px; padding: 0.3rem 0.5rem;
 }
 .ask-sel.docked {
-  position: fixed; left: 50%; transform: translateX(-50%); top: auto;
+  position: fixed; left: 50%; transform: translateX(-50%); top: auto; width: max-content; /* else left: 50% halves it */
   bottom: calc(4rem + env(safe-area-inset-bottom));
 }
+/* With the source sheet open on a phone, the docked bar moves to the top so the two never overlap. */
+body.ask-panel-open .ask-sel.docked { top: calc(0.5rem + env(safe-area-inset-top)); bottom: auto; }
 
 /* Answer cards */
 .ask-card {
   font-family: var(--sans); font-size: 0.8rem; line-height: 1.5; color: var(--ink);
   background: var(--bg); border-left: 1px solid var(--accent);
   padding: 0.1rem 0 0.1rem 0.9rem; margin: 0.6rem 0 1.4rem;
+  scroll-margin: 1rem 0 6rem; /* clear of the ask bar when scrolled into view */
 }
-.ask-card.in-margin { position: absolute; left: calc(100% + 2.5rem); width: 19rem; margin: 0; }
+.ask-card.in-margin { position: absolute; left: calc(100% + 2.5rem); width: var(--card-w, 19rem); margin: 0; }
 .ask-card.in-margin::before {
   content: ""; position: absolute; left: calc(-2.5rem - 3px); top: 1rem; width: 2.5rem;
   border-top: 1px solid var(--accent); opacity: 0.6;
@@ -86,8 +93,8 @@ main > .ask-flash { animation: ask-flash 1.4s ease-out; }
   font: inherit; color: var(--muted); background: none; border: 0; cursor: pointer; padding: 0.1rem 0.2rem;
 }
 .ask-foot button:hover, .ask-foot button:focus-visible { color: var(--ink); text-decoration: underline; }
-.ask-follow { display: flex; gap: 0.3rem; margin-top: 0.45rem; }
-.ask-follow input, .ask-bar input {
+.ask-follow { display: flex; gap: 0.3rem; margin-top: 0.45rem; align-items: flex-end; }
+.ask-follow textarea, .ask-bar textarea {
   flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var(--bg);
   border: 1px solid var(--rule); border-radius: 3px; padding: 0.35rem 0.5rem;
 }
@@ -102,16 +109,26 @@ main > .ask-flash { animation: ask-flash 1.4s ease-out; }
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 
+/* Answers hidden (ask.js setHidden): plain reading, no cards or marks */
+body.ask-hidden .ask-card { display: none; }
+body.ask-hidden main > .has-ask::before { color: var(--muted); opacity: 0.55; font-weight: normal; }
+body.ask-hidden main > .has-ask::after { display: none; }
+.ask-show {
+  font: inherit; font-size: 0.72rem; color: var(--muted); background: none; border: 0;
+  padding: 0.25rem 0.3rem; cursor: pointer; white-space: nowrap;
+}
+.ask-show:hover, .ask-show:focus-visible { color: var(--ink); }
+
 /* Ask about the whole lesson */
 body.ask-on { padding-bottom: 5rem; }
 .ask-bar {
   position: fixed; z-index: 15; left: 0.75rem; right: 0.75rem;
   bottom: calc(0.75rem + env(safe-area-inset-bottom));
-  max-width: 42rem; margin: 0 auto; display: flex; gap: 0.4rem; align-items: center;
+  max-width: 42rem; margin: 0 auto; display: flex; gap: 0.4rem; align-items: flex-end;
   padding: 0.4rem; border: 1px solid var(--rule); border-radius: 3px; background: var(--bg);
   font-family: var(--sans); font-size: 0.8rem;
 }
-.ask-bar input { border: 0; }
+.ask-bar textarea { border: 0; }
 .ask-key {
   font-family: var(--mono); font-size: 0.66rem; color: var(--muted);
   border: 1px solid var(--rule); border-radius: 4px; padding: 0 0.3rem;
@@ -123,8 +140,53 @@ body.ask-on { padding-bottom: 5rem; }
 .ask-mode button[aria-pressed="true"] { background: var(--note-bg); color: var(--ink); font-weight: 600; }
 @media (max-width: 720px) { .ask-key { display: none; } }
 
-/* Wide screens: text on the left, answer cards in the right margin */
+/* Wide screens: text on the left, answer cards in the right margin. The answer column takes the spare
+   width (up to 30rem) and the pair sits centred, so the empty space either side stays small and even.
+   42.5rem is the text column plus the gap before the cards; 49.5rem adds a 3.5rem gutter each side. */
 @media (min-width: 1180px) {
-  body.ask-on main { margin-left: max(3.5rem, calc(50% - 32rem)); }
-  body.ask-on .ask-bar { left: max(3.5rem, calc(50% - 32rem)); right: auto; width: 42rem; margin: 0; }
+  body.ask-on {
+    --card-w: clamp(19rem, 100vw - 49.5rem, 30rem);
+    --text-left: max(3.5rem, (100vw - 42.5rem - var(--card-w)) / 2);
+  }
+  body.ask-on:is(:not(.ask-hidden), .ask-panel-open) main { margin-left: var(--text-left); }
+  body.ask-on:is(:not(.ask-hidden), .ask-panel-open) .ask-bar { left: var(--text-left); right: auto; width: 40rem; margin: 0; }
+}
+
+/* Source citations (path:12-20) open the source panel when the course has a source folder. */
+.src .ask-cite {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline dotted; text-underline-offset: 3px;
+}
+.src .ask-cite:hover, .src .ask-cite:focus-visible { color: var(--accent); }
+
+/* Source panel (ask.js openSource): non-modal, the right half on wide screens, a bottom sheet on phones.
+   It sits under the ask bar, and its lines leave room at the bottom to scroll clear of it. */
+/* A bottom sheet, with the lesson readable above it. Wide screens put it beside the text instead (below). */
+.ask-panel {
+  position: fixed; z-index: 14; inset: auto 0 0 0; width: auto; height: 60vh; max-width: none; max-height: none;
+  margin: 0; padding: 0; border: 0; border-top: 1px solid var(--rule); background: var(--bg); color: var(--ink);
+}
+.ask-panel[open] { display: flex; flex-direction: column; }
+.ask-panel-head {
+  display: flex; align-items: baseline; gap: 0.5rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--rule);
+  font-family: var(--sans); font-size: 0.75rem;
+}
+.ask-panel-path { flex: 1; min-width: 0; font-family: var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.ask-panel-head button { font: inherit; color: var(--muted); background: none; border: 0; cursor: pointer; padding: 0.1rem 0.2rem; }
+.ask-panel-head button:hover, .ask-panel-head button:focus-visible { color: var(--ink); text-decoration: underline; }
+.ask-lines {
+  position: relative; flex: 1; overflow: auto; padding: 0.5rem 0 5rem;
+  font-family: var(--mono); font-size: 0.75rem; line-height: 1.5;
+}
+.ask-line { position: relative; min-height: 1.5em; padding: 0 1rem 0 3.6rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask-line::before {
+  content: attr(data-n); position: absolute; left: 0; width: 2.8rem; text-align: right;
+  color: var(--muted); user-select: none;
+}
+.ask-line.cited { background: var(--accent-tint); }
+.ask-lines > .ask-card { margin: 0.4rem 1rem 0.8rem 3.6rem; }
+.ask-panel-note { margin: 1rem; font-family: var(--sans); font-size: 0.8rem; color: var(--muted); }
+/* Wide screens: the panel fills the space right of the text, where answer cards sit, so it covers no lesson line. */
+@media (min-width: 1180px) {
+  .ask-panel { inset: 0 0 0 calc(var(--text-left) + 40rem); height: auto; border-top: 0; border-left: 1px solid var(--rule); }
 }

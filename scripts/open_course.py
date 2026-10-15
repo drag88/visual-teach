@@ -45,6 +45,9 @@ def ping(port, token=None):
 
 def port_free(port):
     with socket.socket() as s:
+        # Same reuse rule as the server, so connections still closing from the last run do not move the course
+        # to a new port (and lose what the browser saved for the old address, such as the theme).
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", port))
             return True
