@@ -18,7 +18,6 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -36,12 +35,17 @@ def read_json(path):
         return {}
 
 
+def token_of(run):
+    """The phone link's token from a .serve.json record. A server on the network wants it on every request."""
+    return run.get("phone_url", "").partition("?k=")[2] or None
+
+
 def ping(port, token=None):
     url = f"http://localhost:{port}/api/ping" + (f"?k={token}" if token else "")
     try:
         with urllib.request.urlopen(url, timeout=1) as r:
             return json.loads(r.read())
-    except (OSError, ValueError, urllib.error.URLError):
+    except (OSError, ValueError):  # URLError is an OSError
         return None
 
 
@@ -79,14 +83,14 @@ def request_shutdown(port, token=None):
     try:
         with urllib.request.urlopen(req, timeout=2) as r:
             return r.status == 200
-    except (OSError, urllib.error.URLError):
+    except OSError:
         return False
 
 
 def stop(ws):
     run = read_json(ws / ".serve.json")
     pid, port = run.get("pid"), run.get("port")
-    token = run.get("phone_url", "").partition("?k=")[2] or None
+    token = token_of(run)
     info = ping(port, token) if pid and port else None
     # A server from before ping named its process gives no pid; one answering as this course is still real.
     if not info or info.get("course") != str(Path(ws).resolve()) or info.get("pid", pid) != pid:
@@ -125,7 +129,7 @@ def start(ws, cfg):
     with (ws / ".serve.log").open("a", encoding="utf-8") as log:
         subprocess.Popen(cmd, cwd=ws, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, **detach)
     for _ in range(150):
-        token = read_json(ws / ".serve.json").get("phone_url", "").partition("?k=")[2] or None
+        token = token_of(read_json(ws / ".serve.json"))
         info = ping(cfg["port"], token)
         if info and info.get("course") == str(ws):
             return True
@@ -169,7 +173,7 @@ def main():
     cfg["port"] = args.port or cfg.get("port") or DEFAULT_PORT
 
     run = read_json(ws / ".serve.json")
-    token = run.get("phone_url", "").partition("?k=")[2] or None
+    token = token_of(run)
     info = ping(cfg["port"], token)
     if info and info.get("course") == str(ws) and wanted(info, cfg):
         print("Reusing the course server that is already running.")

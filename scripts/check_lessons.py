@@ -22,6 +22,7 @@ PHONE = {"width": 390, "height": 844}
 DESKTOP = {"width": 1280, "height": 900}
 MIN_LABEL_PX = 9.5
 MAX_SENTENCE_WORDS = 25
+SELF_MARKED = ".quiz.recall, .quiz.predict"  # the learner marks these; they stay out of the score
 
 
 def check_links(pages):
@@ -57,7 +58,7 @@ def answer_quizzes(pg):
         q.locator("button.act").click()
     for q in pg.locator(".quiz.spot").all():
         q.locator(f'g[data-spot="{q.get_attribute("data-answer")}"]').first.click()
-    for q in pg.locator(".quiz.recall, .quiz.predict").all():
+    for q in pg.locator(SELF_MARKED).all():
         q.locator("textarea").fill("answer written from memory")
         q.locator("button.act").click()
         # Self-marks feed review, not the score, so marking them right must leave the score line alone.
@@ -95,7 +96,9 @@ def main():
     lessons = sorted(root.glob("lessons/*.html"))
     pages = [p for p in [root / "index.html"] if p.exists()] + lessons + sorted(root.glob("reference/*.html"))
     problems = check_links(pages)
-    problems += [f"{p.name}: does not load {js}" for p in pages for js in ("theme.js", "ask.js") if js not in p.read_text(encoding="utf-8")]
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        problems += [f"{page.name}: does not load {js}" for js in ("theme.js", "ask.js") if js not in text]
     problems += [f"assets/{n} differs from the skill's copy; run sync_course.py" for n in drifted(root)]
 
     with sync_playwright() as p:
@@ -114,7 +117,7 @@ def main():
                 if scheme == "light":
                     n = answer_quizzes(pg)
                     score = pg.locator("#score").inner_text() if pg.locator("#score").count() else ""
-                    graded = n - pg.locator(".quiz.recall, .quiz.predict").count()
+                    graded = n - pg.locator(SELF_MARKED).count()
                     # Review history and links key on the quiz id, so each needs its own.
                     ids = pg.evaluate("[...document.querySelectorAll('.quiz')].map((q) => q.id)")
                     if "" in ids:

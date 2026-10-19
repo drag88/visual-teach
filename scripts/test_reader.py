@@ -19,6 +19,7 @@ from playwright.sync_api import sync_playwright
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import serve  # noqa: E402
+from check_lessons import launch  # noqa: E402
 from test_serve import FAKE_CLAUDE  # noqa: E402
 
 STARTER = HERE.parent / "starter"
@@ -90,7 +91,7 @@ def select_words(pg, selector, words):
 def run(width_name, width, base, shots):
     problems = []
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch(p)
         pg = browser.new_page(viewport={"width": width, "height": 900})
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -209,7 +210,7 @@ def check_sources(width_name, width, base, ws, log, shots):
     """Source panel, Walk through and Where else, answer citations, Check my answer, and review."""
     problems = []
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch(p)
         pg = browser.new_page(viewport={"width": width, "height": 900})
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -333,8 +334,8 @@ def check_sources(width_name, width, base, ws, log, shots):
         if check.locator(".ask-q").inner_text() != ANSWER:
             problems.append(f"{width_name}: the check card came back without the learner's answer")
 
-        # Review findings: a late reply for an earlier file must not replace the open one; widening the
-        # window keeps a panel answer in the panel; Connect keeps its topic list; a dark page prints light.
+        # A late reply for an earlier file must not replace the open one; widening the window keeps a panel
+        # answer in the panel; Connect keeps its topic list; a dark page prints light.
         held = []
         late = lambda url: "path=.env" in url  # noqa: E731
         pg.route(late, lambda route: held.append(route))
@@ -399,7 +400,7 @@ HOSTILE = "\n\n".join([
 def check_answers_are_inert(base):
     problems = []
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch(p)
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
         pg.goto(f"{base}/lessons/0001-lesson.html")
         pg.wait_for_selector("body.ask-on")
@@ -432,7 +433,7 @@ def check_theme(base):
     problems = []
     bg = "getComputedStyle(document.body).backgroundColor"
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch(p)
         url = f"{base}/lessons/0001-lesson.html"
         system = {}
         for scheme in ("light", "dark"):
@@ -457,7 +458,7 @@ def check_teaching(base, course, shots):
     problems = []
     os.environ.pop("FAKE_TEXT", None)  # the default fake answer, not the hostile one this server started with
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch(p)
         for name, width in (("phone", 390), ("desktop", 1280)):
             course.check = lambda *_: (True, "ok: 3 pages, 1 lessons")
             pg = browser.new_page(viewport={"width": width, "height": 900})

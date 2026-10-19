@@ -9,6 +9,7 @@
     connect: "Connect", ask: "Ask", whole: "Ask", check: "Check" };
   // A citation: path:12 or path:12-20, as a lesson's .src line and inline code show it.
   const CITE = /^(\S+?):(\d+)(?:-(\d+))?$/;
+  const BLOCK = "main > [data-p]"; // a lesson paragraph, numbered on load
   const lesson = decodeURIComponent(location.pathname.replace(/^\/+/, ""));
   const title = (document.querySelector("h1") || document.querySelector("title") || {}).textContent || "";
   const wide = matchMedia("(min-width: 1180px)");
@@ -37,7 +38,7 @@
     document.body.classList.toggle("ask-hidden", store("vt-answers") === "hidden");
     buildSelectionBar();
     buildAskBar();
-    fetch("/api/threads?lesson=" + encodeURIComponent(lesson)).then((r) => r.json())
+    getJSON("/api/threads?lesson=" + encodeURIComponent(lesson))
       .then(({ threads }) => {
         threads.forEach(restore);
         layout();
@@ -88,7 +89,7 @@
   function loadTopics() {
     if (topicsLoaded) return;
     topicsLoaded = true;
-    fetch("/api/topics").then((r) => r.json()).then(({ topics }) => {
+    getJSON("/api/topics").then(({ topics }) => {
       const list = node("datalist");
       list.id = "ask-topics";
       for (const t of topics) list.append(Object.assign(node("option"), { value: t.title }));
@@ -180,7 +181,7 @@
         inPanel: true };
       return showSelectionBar(range);
     }
-    const block = start.closest("main > [data-p]");
+    const block = start.closest(BLOCK);
     if (!block) return hideSelectionBar();
     const pre = start.closest("pre");
     pending = { block, text, quote: quoteOf(block, range, text), range: range.cloneRange(), code: Boolean(pre),
@@ -229,7 +230,7 @@
     layout();
     send(card, {
       kind, mode, lesson, lesson_title: title, selection, source,
-      para: block ? { n: +block.dataset.p, key: block.dataset.key, quote } : null,
+      para: paraOf(block, quote),
       para_text: block ? clip(clean(block.innerText), 1500) : null,
       question: kind === "ask" ? text : null,
       topic: kind === "connect" ? text : null,
@@ -284,7 +285,7 @@
       card.scrollIntoView({ behavior: "smooth", block: "nearest" });
       send(card, {
         kind: "whole", mode, lesson, lesson_title: title, question: q, lesson_text: lessonText(),
-        para: block ? { n: +block.dataset.p, key: block.dataset.key, quote: null } : null,
+        para: paraOf(block),
       }, q);
     });
     document.addEventListener("keydown", (e) => {
@@ -383,6 +384,15 @@
 
   function post(path, body, signal) {
     return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+  }
+
+  function getJSON(path) {
+    return fetch(path).then((r) => r.json());
+  }
+
+  // The paragraph a question is about, as the server logs it and a reload finds it again.
+  function paraOf(block, quote = null) {
+    return block ? { n: +block.dataset.p, key: block.dataset.key, quote } : null;
   }
 
   function exchange(card, question) {
@@ -607,8 +617,8 @@
 
   // A code block's source line belongs to the code above it.
   function blockOf(el) {
-    let b = el.closest("main > [data-p]") || el;
-    while (b && !b.matches("main > [data-p]")) b = b.previousElementSibling;
+    let b = el.closest(BLOCK) || el;
+    while (b && !b.matches(BLOCK)) b = b.previousElementSibling;
     return b;
   }
 
@@ -632,7 +642,7 @@
   }
 
   function checkAnswer(quiz, d) {
-    const block = quiz.closest("main > [data-p]");
+    const block = quiz.closest(BLOCK);
     setHidden(false);
     const card = makeCard({ kind: "check", block });
     place(card, block);
@@ -640,14 +650,14 @@
     card.scrollIntoView({ behavior: "smooth", block: "nearest" });
     send(card, {
       kind: "check", mode, lesson, lesson_title: title, quiz: d.quiz, question: d.q, answer: d.answer, model: d.model,
-      para: block ? { n: +block.dataset.p, key: block.dataset.key, quote: null } : null, lesson_text: lessonText(),
+      para: paraOf(block), lesson_text: lessonText(),
     }, d.answer);
   }
 
   function showReview() {
     const lists = main.querySelectorAll("ol.syllabus");
     if (!lists.length) return;
-    fetch("/api/review").then((r) => r.json()).then(({ due }) => {
+    getJSON("/api/review").then(({ due }) => {
       const list = node("ul", "ask-review");
       for (const item of due || []) {
         const url = new URL(item.href, location.href);
@@ -676,7 +686,7 @@
   let teachTimer = 0;
 
   function showTeach() {
-    fetch("/api/teach").then((r) => r.json()).then((info) => {
+    getJSON("/api/teach").then((info) => {
       if (!info.allowed) return;
       const box = node("section", "ask-teach");
       const head = node("h2");
@@ -702,7 +712,7 @@
 
   // On a lesson page, point to where the next lesson is taught (only where teaching is allowed).
   function showNextLink() {
-    fetch("/api/teach").then((r) => r.json()).then((info) => {
+    getJSON("/api/teach").then((info) => {
       if (!info.allowed) return;
       const line = node("p", "ask-next-line");
       const link = node("a", "ask-next");
@@ -721,7 +731,7 @@
       .then(({ job }) => renderTeach(box, job))
       .catch(async (err) => {
         try {
-          const info = await fetch("/api/teach").then((r) => r.json());
+          const info = await getJSON("/api/teach");
           renderTeach(box, info.job);
         } catch (_) { /* Keep the start error visible if the status request also fails. */ }
         const line = node("p", "ask-error");
@@ -732,7 +742,7 @@
 
   function pollTeach(box) {
     clearTimeout(teachTimer);
-    fetch("/api/teach").then((r) => r.json()).then(({ job }) => renderTeach(box, job))
+    getJSON("/api/teach").then(({ job }) => renderTeach(box, job))
       .catch(() => { teachTimer = setTimeout(() => pollTeach(box), 4000); });
   }
 
@@ -754,6 +764,7 @@
     }
     if (running) {
       status.append(button("Stop", () => post("/api/teach/stop", {}).then(() => pollTeach(box)).catch(() => {})));
+      clearTimeout(teachTimer); // a start from this page renders without pollTeach, so one may be waiting
       teachTimer = setTimeout(() => pollTeach(box), 2000);
       return;
     }

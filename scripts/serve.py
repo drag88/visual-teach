@@ -96,6 +96,15 @@ def read_text(path):
         return ""
 
 
+def read_dict(path):
+    """A file's JSON object, or {} when the file is missing, broken or holds something else."""
+    try:
+        data = json.loads(read_text(path) or "{}")
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 class Course:
     """The workspace, its question log, and how to ask Claude about it."""
 
@@ -224,23 +233,23 @@ class Course:
         """The environment for a Claude run. --restricted skips the learner's settings files, hooks and plugins
         included, so the one part they rely on to run at all (the env block: proxy certificates, say) is passed on.
         A variable already set in the shell wins."""
-        try:
-            data = json.loads(read_text(self.user_settings) or "{}")
-        except ValueError:
-            data = {}
         env = dict(os.environ)
-        extra = data.get("env") if isinstance(data, dict) else None
+        extra = read_dict(self.user_settings).get("env")
         for key, value in (extra if isinstance(extra, dict) else {}).items():
             if isinstance(key, str) and isinstance(value, str):
                 env.setdefault(key, value)
         return env
 
-    def command(self, tier, session, resume):
+    def claude_args(self, tier):
+        """The start of every Claude run, answers and teaching alike, so both stay isolated the same way."""
         model, effort = TIERS[tier]
+        return [self.claude, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                "--model", model, "--effort", effort, "--permission-mode", "dontAsk", "--strict-mcp-config",
+                "--restricted"]
+
+    def command(self, tier, session, resume):
         deep_web = tier == "deep" and self.web
-        cmd = [self.claude, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-               "--model", model, "--effort", effort, "--permission-mode", "dontAsk", "--strict-mcp-config",
-               "--restricted", "--append-system-prompt-file", self.arg_file("system", self.system_prompt()),
+        cmd = [*self.claude_args(tier), "--append-system-prompt-file", self.arg_file("system", self.system_prompt()),
                "--tools", *READ_TOOLS, *(["WebFetch"] if deep_web else [])]
         if deep_web:
             cmd += ["--allowedTools", *[f"WebFetch(domain:{d})" for d in self.web]]
@@ -399,14 +408,9 @@ class Course:
     # Teaching from the course page
 
     def settings(self):
-        try:
-            data = json.loads(read_text(self.ws / "course.json") or "{}")
-        except ValueError:
-            return {}
-        return data if isinstance(data, dict) else {}
+        return read_dict(self.ws / "course.json")
 
     def teach_command(self):
-        model, effort = TIERS["deep"]
         ws = rule_path(self.ws)
         # Exec form (command plus args): no shell, so a path with spaces or backslashes reaches Python intact.
         guard = {"type": "command", "command": sys.executable, "onFailure": "block",  # fail closed, not open
@@ -415,9 +419,7 @@ class Course:
         # --restricted loads only what is passed here, so the learner's own allow rules cannot widen these.
         # Claude Code checks writes against Edit rules and ignores Write(path) rules, so only Edit rules are given.
         # course.json is out of reach because the server runs its refresh command in a shell.
-        cmd = [self.claude, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-               "--model", model, "--effort", effort, "--permission-mode", "dontAsk", "--strict-mcp-config",
-               "--restricted", "--settings", self.arg_file("settings", json.dumps(settings)),
+        cmd = [*self.claude_args("deep"), "--settings", self.arg_file("settings", json.dumps(settings)),
                "--tools", *READ_TOOLS, "Edit", "Write", *(["WebFetch"] if self.web else []),
                "--allowedTools", f"Edit({ws}/**)", *[f"WebFetch(domain:{d})" for d in self.web],
                "--disallowedTools", *[f"Edit({ws}/{f})" for f in

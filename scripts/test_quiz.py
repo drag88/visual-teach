@@ -11,6 +11,9 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_lessons import launch  # noqa: E402
+
 STARTER = Path(__file__).resolve().parent.parent / "starter"
 FILLER = "".join(f"<p>Filler paragraph {i}, so the quizzes sit below the first screen.</p>\n" for i in range(30))
 # The mcq has no id, so quiz.js keys it by the first six words of its question.
@@ -39,7 +42,7 @@ DETAIL_KEYS = {"quiz", "type", "event", "right", "q", "answer", "model"}
 def run(lesson):
     problems = []
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch(p)
         pg = browser.new_page(viewport={"width": 390, "height": 844})
         pg.set_default_timeout(5000)
         errors = []
