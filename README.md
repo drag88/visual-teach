@@ -1,4 +1,8 @@
 <div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.png">
+    <img src="docs/images/banner.png" width="860" alt="An open book whose pages become a flowchart, with a note card beside a highlighted line">
+  </picture>
   <h1>visual-teach</h1>
   <p><strong>Learn any topic, or any codebase, as short visual lessons in your browser.<br>
   Highlight anything and Claude answers beside it.</strong></p>
