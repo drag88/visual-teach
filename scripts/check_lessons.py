@@ -27,7 +27,7 @@ MAX_SENTENCE_WORDS = 25
 def check_links(pages):
     problems = []
     for page in pages:
-        for href in re.findall(r'href="([^"#:?]+)"', page.read_text()):
+        for href in re.findall(r'href="([^"#:?]+)"', page.read_text(encoding="utf-8")):
             if not (page.parent / href).resolve().exists():
                 problems.append(f"{page.name}: broken link {href}")
     return problems
@@ -81,17 +81,25 @@ def smallest_diagram_label(pg):
     )
 
 
+def launch(p):
+    """Playwright's own Chromium, or the installed Chrome when that was never downloaded."""
+    try:
+        return p.chromium.launch()
+    except Exception:
+        return p.chromium.launch(channel="chrome")
+
+
 def main():
     root = Path(sys.argv[1]).expanduser().resolve()
     shots = Path(sys.argv[2]).expanduser() if len(sys.argv) > 2 else None
     lessons = sorted(root.glob("lessons/*.html"))
     pages = [p for p in [root / "index.html"] if p.exists()] + lessons + sorted(root.glob("reference/*.html"))
     problems = check_links(pages)
-    problems += [f"{p.name}: does not load {js}" for p in pages for js in ("theme.js", "ask.js") if js not in p.read_text()]
+    problems += [f"{p.name}: does not load {js}" for p in pages for js in ("theme.js", "ask.js") if js not in p.read_text(encoding="utf-8")]
     problems += [f"assets/{n} differs from the skill's copy; run sync_course.py" for n in drifted(root)]
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch(p)
         for scheme in ("light", "dark"):
             ctx = browser.new_context(viewport=PHONE, color_scheme=scheme, device_scale_factor=2)
             pg = ctx.new_page()

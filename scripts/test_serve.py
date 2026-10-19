@@ -28,10 +28,14 @@ FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, sys
 argv = sys.argv[1:]
 prompt = sys.stdin.read()
-with open(os.environ["FAKE_CLAUDE_LOG"], "a") as f:
-    f.write(json.dumps({"argv": argv, "stdin": prompt}) + "\n")
 def arg(name):
     return argv[argv.index(name) + 1] if name in argv else None
+def contents(flag):
+    value = arg(flag)
+    return open(value, encoding="utf-8").read() if value and os.path.isfile(value) else value
+with open(os.environ["FAKE_CLAUDE_LOG"], "a") as f:
+    f.write(json.dumps({"argv": argv, "stdin": prompt, "system": contents("--append-system-prompt-file"),
+                        "settings": contents("--settings"), "env": os.environ.get("VT_TEST_ENV")}) + "\n")
 if "--resume" in argv and os.environ.get("FAKE_CLAUDE_FAIL_RESUME"):
     print("No conversation found", file=sys.stderr)
     sys.exit(1)
@@ -212,9 +216,14 @@ class ServeTest(unittest.TestCase):
         stdin = self.calls()[0]["stdin"]
         self.assertIn("What is the runner?", stdin)
         self.assertIn("¶2 The runner hands out jobs.", stdin)
-        system = argv[argv.index("--append-system-prompt") + 1]
+        # Long, multi-line text travels in a file: a Windows command line (claude.cmd) would mangle it.
+        self.assertNotIn("--append-system-prompt", argv)
+        system = self.calls()[0]["system"]
         self.assertIn("office manager", system)
         self.assertIn("test mission", system)
+        # The learner's own Claude settings (hooks, plugins, allow rules) stay out of answers.
+        self.assertIn("--restricted", argv)
+        self.assertNotIn("--setting-sources", argv)
 
     def test_page_question_names_the_paragraph_being_read(self):
         self.ask(kind="whole", selection=None, para_text=None, para={"n": 2, "key": "the-runner", "quote": None})
@@ -439,28 +448,110 @@ class ServeTest(unittest.TestCase):
         self.assertIn("Write", tools)
         self.assertNotIn("Bash", argv, "no shell: the server runs every script itself")
         self.assertEqual(argv[argv.index("--model") + 1], "opus")
+        # Claude Code checks writes against Edit rules and ignores Write(path) rules, so only Edit rules are given.
         allowed = self.flag_values(argv, "--allowedTools")
         self.assertIn(f"Edit(/{ws}/**)", allowed)
-        self.assertIn(f"Write(/{ws}/**)", allowed)
         denied = self.flag_values(argv, "--disallowedTools")
-        for tool in ("Edit", "Write"):  # course.json holds the refresh command, which the server runs as a shell command
-            self.assertIn(f"{tool}(/{ws}/course.json)", denied)
+        self.assertIn(f"Edit(/{ws}/course.json)", denied)  # holds the refresh command, run in a shell
+        self.assertFalse([r for r in allowed + denied if r.startswith("Write(")])
         dirs = [argv[i + 1] for i, a in enumerate(argv) if a == "--add-dir"]
         self.assertIn(str(serve.SKILL), dirs)
         self.assertIn(str(self.code.resolve()), dirs)
         self.assertIn("SKILL.md", call["stdin"])
         self.assertIn("next lesson", call["stdin"])
         # Rules alone are not enough: a user's own settings may allow Edit everywhere, so a hook checks every path.
-        self.assertEqual(argv[argv.index("--setting-sources") + 1], "user", "no settings planted in the course")
-        hooks = json.loads(argv[argv.index("--settings") + 1])["hooks"]["PreToolUse"]
-        self.assertIn("teach_guard.py", hooks[0]["hooks"][0]["command"])
+        self.assertIn("--restricted", argv, "no user or course settings: only what the server passes")
+        hooks = json.loads(call["settings"])["hooks"]["PreToolUse"]
+        hook = hooks[0]["hooks"][0]
+        # Exec form: no shell, so a path with spaces or backslashes reaches Python intact on any system.
+        self.assertEqual(hook["command"], sys.executable)
+        self.assertEqual(hook.get("onFailure"), "block", "a guard that cannot run must stop the edit, not wave it on")
+        for protected in ("assets/*.js", ".claude/**", "CLAUDE.md"):
+            self.assertIn(f"Edit(/{ws}/{protected})", denied)
+        self.assertIn(str(serve.SKILL / "scripts" / "teach_guard.py"), hook["args"])
+        self.assertIn(ws, hook["args"])
         self.assertIn("Edit", hooks[0]["matcher"])
         self.assertIn("Write", hooks[0]["matcher"])
 
     def test_answers_ignore_settings_planted_in_the_course(self):
         self.ask()
-        argv = self.calls()[0]["argv"]
-        self.assertEqual(argv[argv.index("--setting-sources") + 1], "user")
+        self.assertIn("--restricted", self.calls()[0]["argv"])
+
+    def test_data_rule_survives_a_course_prompt(self):
+        (self.ws / "ask-prompt.md").write_text("A course's own answer rules.\n")
+        self.ask()
+        system = self.calls()[0]["system"]
+        self.assertIn("A course's own answer rules.", system)
+        self.assertIn("never data", system, "the data rule is the server's, not a prompt file's")
+
+    def test_claude_config_dir_is_respected(self):
+        home = self.ws.parent / "work-profile"
+        home.mkdir()
+        (home / "settings.json").write_text(json.dumps({"env": {"VT_TEST_ENV": "work"}}))
+        os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+        os.environ.pop("VT_TEST_ENV", None)
+        try:
+            self.assertEqual(serve.Course(self.ws, None, self.claude, []).claude_env().get("VT_TEST_ENV"), "work")
+        finally:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+
+    def test_a_failed_launch_leaves_no_prompt_files(self):
+        self.server.course.claude = str(self.ws.parent / "no-such-claude")
+        _, events = self.ask()
+        self.assertEqual(events[-1][0], "error")
+        self.assertEqual(list(self.server.course.tmp.iterdir()), [])
+
+    def test_ping_names_the_process_and_shutdown_is_local_and_clean(self):
+        _, data = self.request("GET", "/api/ping")
+        self.assertEqual(json.loads(data)["pid"], os.getpid())
+        resp, _ = self.request("POST", "/api/shutdown", {}, headers={"Origin": "http://evil.example"})
+        self.assertEqual(resp.status, 403)
+        tmp = self.server.course.tmp
+        resp, _ = self.request("POST", "/api/shutdown", {})
+        self.assertEqual(resp.status, 200)
+        end = time.time() + 5
+        while tmp.exists() and time.time() < end:
+            time.sleep(0.05)
+        self.assertFalse(tmp.exists(), "a clean shutdown removes the server's temporary files")
+
+    def test_user_settings_env_reaches_claude(self):
+        # --restricted skips settings files, so the env block a learner relies on (proxy certificates, say) is passed on.
+        settings = self.ws.parent / "user-settings.json"
+        settings.write_text(json.dumps({"env": {"VT_TEST_ENV": "from-settings"}, "hooks": {"Stop": []}}))
+        self.server.course.user_settings = settings
+        os.environ.pop("VT_TEST_ENV", None)
+        self.ask()
+        self.assertEqual(self.calls()[0]["env"], "from-settings")
+        os.environ["VT_TEST_ENV"] = "from-shell"
+        try:
+            self.ask(question="Again")
+            self.assertEqual(self.calls()[-1]["env"], "from-shell", "the shell's own value wins")
+        finally:
+            os.environ.pop("VT_TEST_ENV", None)
+
+    def test_windows_stop_kills_the_whole_tree(self):
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        calls = []
+
+        def taskkill(cmd, **_):
+            calls.append(cmd)
+            proc.kill()
+            return subprocess.CompletedProcess(cmd, 0)
+
+        old = serve.WINDOWS, serve.subprocess.run
+        serve.WINDOWS, serve.subprocess.run = True, taskkill
+        try:
+            serve.stop(proc)
+        finally:
+            serve.WINDOWS, serve.subprocess.run = old
+        self.assertEqual(calls, [["taskkill", "/T", "/F", "/PID", str(proc.pid)]])
+        self.assertIsNotNone(proc.returncode)
+
+    def test_rule_paths_on_windows(self):
+        # Claude Code matches Windows paths in their POSIX form: C:\\Users\\me becomes /c/Users/me.
+        from pathlib import PureWindowsPath
+        self.assertEqual(serve.rule_path(PureWindowsPath(r"C:\Users\me\learn\course[1]")), "//c/Users/me/learn/course\\[1\\]")
+        self.assertEqual(serve.rule_path(Path("/tmp/course")), "//tmp/course")
 
     def test_permission_rules_escape_the_course_path(self):
         self.server.course.ws = Path("/tmp/course[1]")

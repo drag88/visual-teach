@@ -81,7 +81,7 @@
     if (/^\/(index\.html)?$/.test(location.pathname)) {
       showReview();
       showTeach();
-    }
+    } else showNextLink();
   }
 
   let topicsLoaded = false;
@@ -688,11 +688,30 @@
       for (const action of ["next", "update", ...(info.refresh ? ["refresh"] : [])]) {
         actions.append(button(TEACH_LABEL[action], () => startTeach(box, action)));
       }
+      box.id = "teach";
       box.append(head, note, actions, node("div", "ask-teach-status"));
-      const footer = main.querySelector("footer");
-      if (footer) footer.before(box);
+      // Right under the lesson list (and the review list when there is one), where the next lesson is looked for.
+      const lists = main.querySelectorAll("ol.syllabus");
+      const after = main.querySelector(".ask-review") || lists[lists.length - 1];
+      if (after) after.after(box);
       else main.append(box);
       renderTeach(box, info.job);
+      if (location.hash === "#teach") box.scrollIntoView({ block: "start" });
+    }).catch(() => {});
+  }
+
+  // On a lesson page, point to where the next lesson is taught (only where teaching is allowed).
+  function showNextLink() {
+    fetch("/api/teach").then((r) => r.json()).then((info) => {
+      if (!info.allowed) return;
+      const line = node("p", "ask-next-line");
+      const link = node("a", "ask-next");
+      link.href = "/index.html#teach";
+      link.textContent = "Teach the next lesson";
+      line.append(link, " from the course home page.");
+      const footer = main.querySelector("footer");
+      if (footer) footer.before(line);
+      else main.append(line);
     }).catch(() => {});
   }
 

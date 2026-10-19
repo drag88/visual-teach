@@ -463,6 +463,10 @@ def check_teaching(base, course, shots):
             pg = browser.new_page(viewport={"width": width, "height": 900})
             pg.goto(f"{base}/")
             pg.wait_for_selector(".ask-teach button")
+            # Easy to find: right under the lesson list, before the reference sheets, with an anchor to link to.
+            if not pg.evaluate("""(() => { const t = document.querySelector('#teach.ask-teach'), r = [...document.querySelectorAll('h2')].find((h) => h.textContent === 'Reference');
+                return Boolean(t && r && (t.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING)); })()"""):
+                problems.append(f"teaching ({name}): the Teaching section is not right under the lessons")
             labels = pg.locator(".ask-teach button").all_inner_texts()
             if labels != ["Teach the next lesson", "Update lessons from my questions"]:
                 problems.append(f"teaching ({name}): buttons are {labels}")
@@ -485,6 +489,17 @@ def check_teaching(base, course, shots):
                 problems.append(f"teaching ({name}): page scrolls sideways")
             if shots:
                 pg.locator(".ask-teach").screenshot(path=str(shots / f"teaching-{name}.png"))
+            lesson_page = browser.new_page(viewport={"width": width, "height": 900})
+            lesson_page.goto(f"{base}/lessons/0001-lesson.html")
+            lesson_page.wait_for_selector("body.ask-on")
+            link = lesson_page.locator("a.ask-next", has_text="next lesson")
+            try:
+                link.wait_for(timeout=5000)
+                if not link.get_attribute("href").endswith("index.html#teach"):
+                    problems.append(f"teaching ({name}): the lesson's next-lesson link goes to {link.get_attribute('href')}")
+            except Exception:
+                problems.append(f"teaching ({name}): a lesson page does not point to where the next lesson is taught")
+            lesson_page.close()
             other = browser.new_page(viewport={"width": width, "height": 900})
             other.goto(f"{base}/")
             other.wait_for_selector(".ask-teach button")

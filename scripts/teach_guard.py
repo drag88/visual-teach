@@ -10,7 +10,7 @@ def main():
         if len(sys.argv) != 2:
             raise ValueError
         course = Path(sys.argv[1]).resolve()
-        event = json.load(sys.stdin)
+        event = json.loads(sys.stdin.buffer.read().decode("utf-8"))
         if event["tool_name"] not in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
             raise ValueError
         args = event["tool_input"]

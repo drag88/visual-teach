@@ -40,7 +40,7 @@
 
 3. Read. The first lesson opens in your browser. Highlight anything to ask.
 
-Requirements: Node.js for the one-line install; Python 3.9 or later; Claude Code's `claude` command installed and signed in for live answers; Python Playwright with Chromium only for the checks.
+Requirements: Node.js for the one-line install; Python 3.9 or later; Claude Code's `claude` command installed and signed in for live answers; Python Playwright only for the checks (it uses its own Chromium, or your installed Chrome). On Windows, type `python` or `py` wherever this page says `python3`.
 
 ## What you get
 
@@ -129,9 +129,9 @@ It runs on your own Claude plan. Reading and local quizzes need no live answers.
 
 ## Privacy and safety
 
-- Course files, notes and saved answers stay on your computer. Live questions send context to Claude through your signed-in account.
+- Course files, notes and saved answers stay on your computer. Live questions send context to Claude through your signed-in account, including any files it reads from the `--code` folder, as in any Claude Code session. Point `--code` at code or notes you are allowed to share with Claude, not at folders of customer or personal data. Lessons quote code, never data.
 - The server listens on localhost by default. With `--lan`, it listens on your local network behind a token in the phone link. Keep that link private.
-- Answers are read-only. Teaching sessions can edit course content, including lesson files, only inside the course folder.
+- Answers and teaching sessions run with `claude --restricted`: your own Claude settings, hooks and plugins stay out of them. Answers are read-only. Teaching sessions can edit course content, including lesson files, only inside the course folder.
 - `scripts/teach_guard.py` enforces that boundary and protects settings and shared assets. Served course pages run only the skill's own scripts.
 
 <details>

@@ -135,6 +135,8 @@ body.ask-hidden main > .has-ask::after { display: none; }
 .ask-teach-summary { font-size: 0.92rem; }
 .ask-teach-check { font-size: 0.75rem; margin: 0.6rem 0; }
 
+.ask-next-line { color: var(--muted); font-size: 0.9rem; margin: 2.5rem 0 0; }
+
 /* Ask about the whole lesson */
 body.ask-on { padding-bottom: 5rem; }
 .ask-bar {

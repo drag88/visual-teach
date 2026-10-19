@@ -21,18 +21,18 @@ import os
 import re
 import secrets
 import select
-import shlex
 import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePath
 from urllib.parse import parse_qs, urlparse
 
 import sync_course  # the scripts folder is on the path when serve.py runs
@@ -57,6 +57,9 @@ KIND_TASK = {
              "went off. Under 120 words.",
 }
 READ_TOOLS = ["Read", "Grep", "Glob"]
+DATA_RULE = ("Quote code and prose, never data. If a file holds records, query results, logs or anything about real "
+             "people or customers (names, contact details, IDs, account numbers), describe its shape in words instead "
+             "of repeating any of it.")
 # Teaching sessions started from the course page. Each runs Claude with edit rights inside the course folder only.
 TEACH_TASKS = {
     "next": "Write the next lesson in the syllabus (index.html shows which one is next), then update index.html, "
@@ -71,6 +74,15 @@ MAX_BODY = 1_000_000
 MAX_SOURCE = 512_000
 REVIEW_DAYS = (1, 3, 7)  # wait after a miss, by rights in a row since it; the third right retires the question
 COOKIE = "vt_k"
+WINDOWS = os.name == "nt"
+
+
+def rule_path(path):
+    """A path the way Claude Code permission rules want it: "//" then the absolute path in POSIX form, a Windows
+    drive included (C:\\Users\\me becomes //c/Users/me), with glob characters escaped so it matches only itself."""
+    p = path if isinstance(path, PurePath) else PurePath(path)
+    posix = f"/{p.drive[0].lower()}/" + "/".join(p.parts[1:]) if p.drive else p.as_posix()
+    return "/" + re.sub(r"([\\*?\[\]])", r"\\\1", posix)
 
 
 def now():
@@ -79,7 +91,7 @@ def now():
 
 def read_text(path):
     try:
-        return Path(path).read_text()
+        return Path(path).read_text(encoding="utf-8")
     except OSError:
         return ""
 
@@ -99,11 +111,14 @@ class Course:
         self.busy = set()  # threads with an answer still streaming
         self.live = set()  # running claude processes, stopped if the server stops
         self.job = None  # the latest teaching job started from the course page
+        self.user_settings = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"
+        # Long or structured arguments go in files here, never on the command line, which Windows can mangle.
+        self.tmp = Path(tempfile.mkdtemp(prefix="visual-teach-"))
 
     # Question log
 
     def append(self, record, log=None):
-        with self.lock, (log or self.log).open("a") as f:
+        with self.lock, (log or self.log).open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def records(self, log=None):
@@ -161,6 +176,7 @@ class Course:
                 parts.append(f"## The course's {name}\n\n{text}")
         if self.code:
             parts.append(f"The learner's code is in {self.code}. Read it only to check a claim, and cite path:line.")
+        parts.append(DATA_RULE)  # after any course prompt file, so none can drop it
         return "\n\n".join(p for p in parts if p)
 
     def user_prompt(self, q, follow_up):
@@ -194,13 +210,37 @@ class Course:
             lines.append(f"The lesson, paragraph by paragraph:\n{q['lesson_text']}")
         return "\n\n".join(lines)
 
+    def arg_file(self, name, text):
+        path = self.tmp / f"{name}-{uuid.uuid4().hex}"
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def forget_files(self, cmd):
+        for arg in cmd:
+            if arg.startswith(str(self.tmp)):
+                Path(arg).unlink(missing_ok=True)
+
+    def claude_env(self):
+        """The environment for a Claude run. --restricted skips the learner's settings files, hooks and plugins
+        included, so the one part they rely on to run at all (the env block: proxy certificates, say) is passed on.
+        A variable already set in the shell wins."""
+        try:
+            data = json.loads(read_text(self.user_settings) or "{}")
+        except ValueError:
+            data = {}
+        env = dict(os.environ)
+        extra = data.get("env") if isinstance(data, dict) else None
+        for key, value in (extra if isinstance(extra, dict) else {}).items():
+            if isinstance(key, str) and isinstance(value, str):
+                env.setdefault(key, value)
+        return env
+
     def command(self, tier, session, resume):
         model, effort = TIERS[tier]
         deep_web = tier == "deep" and self.web
         cmd = [self.claude, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                "--model", model, "--effort", effort, "--permission-mode", "dontAsk", "--strict-mcp-config",
-               "--setting-sources", "user",
-               "--append-system-prompt", self.system_prompt(),
+               "--restricted", "--append-system-prompt-file", self.arg_file("system", self.system_prompt()),
                "--tools", *READ_TOOLS, *(["WebFetch"] if deep_web else [])]
         if deep_web:
             cmd += ["--allowedTools", *[f"WebFetch(domain:{d})" for d in self.web]]
@@ -238,8 +278,14 @@ class Course:
     def run(self, cmd, prompt, send, gone):
         """Stream one Claude run through send(event, data). Returns a result dict, or None if the reader left."""
         started = time.time()
-        proc = subprocess.Popen(cmd, cwd=self.ws, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            proc = subprocess.Popen(cmd, cwd=self.ws, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                                    env=self.claude_env(), start_new_session=True)
+        except OSError as exc:
+            self.forget_files(cmd)
+            return {"text": "", "model": None, "cost_usd": None, "ms_first_word": None, "returncode": 127,
+                    "stderr": "", "error": f"Could not start claude: {exc}", "ms_total": 0}
         err = []
         with self.lock:
             self.live.add(proc)
@@ -285,6 +331,7 @@ class Course:
             proc.stdout.close()
             with self.lock:
                 self.live.discard(proc)
+            self.forget_files(cmd)
         proc.wait()
         drain.join(timeout=2)
         proc.stderr.close()
@@ -360,16 +407,21 @@ class Course:
 
     def teach_command(self):
         model, effort = TIERS["deep"]
-        ws = re.sub(r"([\\*?\[\]])", r"\\\1", str(self.ws))
-        guard = shlex.join([sys.executable, "-I", str(SKILL / "scripts" / "teach_guard.py"), str(self.ws)])
-        settings = {"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit",
-                                            "hooks": [{"type": "command", "command": guard}]}]}}
+        ws = rule_path(self.ws)
+        # Exec form (command plus args): no shell, so a path with spaces or backslashes reaches Python intact.
+        guard = {"type": "command", "command": sys.executable, "onFailure": "block",  # fail closed, not open
+                 "args": ["-I", str(SKILL / "scripts" / "teach_guard.py"), str(self.ws)]}
+        settings = {"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [guard]}]}}
+        # --restricted loads only what is passed here, so the learner's own allow rules cannot widen these.
+        # Claude Code checks writes against Edit rules and ignores Write(path) rules, so only Edit rules are given.
+        # course.json is out of reach because the server runs its refresh command in a shell.
         cmd = [self.claude, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                "--model", model, "--effort", effort, "--permission-mode", "dontAsk", "--strict-mcp-config",
-               "--setting-sources", "user", "--settings", json.dumps(settings),
+               "--restricted", "--settings", self.arg_file("settings", json.dumps(settings)),
                "--tools", *READ_TOOLS, "Edit", "Write", *(["WebFetch"] if self.web else []),
-               "--allowedTools", f"Edit(/{ws}/**)", f"Write(/{ws}/**)", *[f"WebFetch(domain:{d})" for d in self.web],
-               "--disallowedTools", *[f"{t}(/{ws}/{f})" for t in ("Edit", "Write") for f in ("course.json", ".serve.json")],
+               "--allowedTools", f"Edit({ws}/**)", *[f"WebFetch(domain:{d})" for d in self.web],
+               "--disallowedTools", *[f"Edit({ws}/{f})" for f in
+                                      ("course.json", ".serve.json", "assets/*.js", ".claude/**", "CLAUDE.md", "AGENTS.md")],
                "--add-dir", str(SKILL)]
         if self.code:
             cmd += ["--add-dir", str(self.code)]
@@ -391,8 +443,9 @@ class Course:
         return "\n".join(lines)
 
     def call(self, cmd, job, cwd, shell=False, timeout=900):
-        proc = subprocess.Popen(cmd, cwd=cwd, shell=shell, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, start_new_session=True)
+        proc = subprocess.Popen(cmd, cwd=cwd, shell=shell, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                                start_new_session=True)
         with self.lock:
             self.live.add(proc)
         threading.Thread(target=watch, args=(proc, lambda: job["stopped"]), daemon=True).start()
@@ -406,8 +459,8 @@ class Course:
                 self.live.discard(proc)
 
     def checkers(self):
-        return [[sys.executable, "-I"],
-                ["uv", "run", "--no-project", "--no-config", "--quiet", "--with", "playwright", "python", "-I"]]
+        return [[sys.executable, "-I", "-X", "utf8"],
+                ["uv", "run", "--no-project", "--no-config", "--quiet", "--with", "playwright", "python", "-I", "-X", "utf8"]]
 
     def check(self, job):
         """(ok, report) from check_lessons.py; ok is None when no Python with Playwright can be found."""
@@ -601,18 +654,28 @@ def watch(proc, gone):
 
 
 def stop(proc):
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
+    """End a process and everything it started. On Mac and Linux each run has its own process group; Windows has
+    none, so taskkill /T ends the tree from the process down."""
+    if WINDOWS:
+        if proc.poll() is None:  # an exited process's PID may already belong to something else
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    else:
         try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+            finally:
+                # A child can outlive its parent or ignore SIGTERM.
+                os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
             pass
-        finally:
-            # A child can outlive its parent or ignore SIGTERM.
-            os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    proc.wait()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -665,7 +728,7 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path == "/api/ping":
             return self.json({"ok": True, "course": str(course.ws), "tiers": {k: v[0] for k, v in TIERS.items()},
                               "web": course.web, "code": str(course.code) if course.code else None,
-                              "lan": bool(self.server.token)})
+                              "lan": bool(self.server.token), "pid": os.getpid()})
         if url.path == "/api/threads":
             # keep_blank_values: the course home page is the lesson "", not a request for every lesson
             lesson = parse_qs(url.query, keep_blank_values=True).get("lesson", [None])[0]
@@ -715,6 +778,13 @@ class Handler(SimpleHTTPRequestHandler):
             course.append({"t": now(), "lesson": body["lesson"], "quiz": body["quiz"], "type": body.get("type"),
                            "q": body.get("q"), "right": right if isinstance(right, bool) else None}, course.quiz_log)
             return self.json({"ok": True})
+        if path == "/api/shutdown":
+            if not self.local():
+                return self.send_error(403, "Only from this computer")
+            self.json({"ok": True})
+            # A clean stop ends the Claude runs and removes the temporary files; a forced one would leave both.
+            threading.Thread(target=lambda: (self.server.shutdown(), self.server.server_close()), daemon=True).start()
+            return
         if path in ("/api/teach", "/api/teach/stop"):
             if not self.local():
                 return self.send_error(403, "Teaching runs only from this computer")
@@ -775,8 +845,16 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 class CourseServer(ThreadingHTTPServer):
+    allow_reuse_address = not WINDOWS  # on Windows reuse would let another program share the port
+
+    def server_bind(self):
+        if WINDOWS and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
     def server_close(self):
         stop_all(self.course)
+        shutil.rmtree(self.course.tmp, ignore_errors=True)
         super().server_close()
 
 
@@ -816,7 +894,7 @@ def main():
     if args.lan:
         run["phone_url"] = f"http://{lan_address()}:{args.port}/?k={server.token}"
     run_file = ws / ".serve.json"  # read by open_course.py; holds the phone token, so only this user may read it
-    run_file.write_text(json.dumps(run))
+    run_file.write_text(json.dumps(run), encoding="utf-8")
     run_file.chmod(0o600)
     print(f"Course: {ws}")
     print(f"On this Mac: {run['url']}")
@@ -831,7 +909,7 @@ def main():
     finally:
         server.server_close()
         try:
-            if json.loads(run_file.read_text()).get("pid") == os.getpid():
+            if json.loads(run_file.read_text(encoding="utf-8")).get("pid") == os.getpid():
                 run_file.unlink()
         except (OSError, ValueError):
             pass

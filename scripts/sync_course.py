@@ -30,7 +30,7 @@ def drifted(ws):
 
 def link_assets(page, ws):
     prefix = "" if page.parent == ws else "../"
-    html = page.read_text()
+    html = page.read_text(encoding="utf-8")
     original = html
     sheets = ["style.css", "ask.css"] + (["course.css"] if (ws / "assets" / "course.css").exists() else [])
     tags = [f'<link rel="stylesheet" href="{prefix}assets/{s}">' for s in sheets]
@@ -43,7 +43,7 @@ def link_assets(page, ws):
     if missing:
         html = re.sub(r"</body>", "\n".join(missing) + "\n</body>", html, count=1)
     if html != original:
-        page.write_text(html)
+        page.write_text(html, encoding="utf-8")
         return True
     return False
 
@@ -59,7 +59,7 @@ def sync(ws):
     linked = [p.relative_to(ws) for p in pages(ws) if p.resolve().is_relative_to(ws) and link_assets(p, ws)]
     marker = ws / ".diagram-design"
     if not marker.exists():
-        marker.write_text("profile: learn\n")
+        marker.write_text("profile: learn\n", encoding="utf-8")
     src = SKILL / "starter" / "diagram-profile-learn.md"
     if not PROFILE.exists() or PROFILE.read_bytes() != src.read_bytes():
         PROFILE.parent.mkdir(parents=True, exist_ok=True)
