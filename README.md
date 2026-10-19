@@ -9,6 +9,7 @@ Teach any topic as a course of short, visual, plain-English lessons you read in 
 - Learns from your own sources: give a course a folder (a codebase, or markdown chapters, papers, notes) and every citation opens the real file beside the lesson, scrolled to the cited lines.
 - Tests you properly: predict-then-reveal questions, "Check my answer" on anything you write from memory, and missed questions that come back for review on later days.
 - Saves every question and quiz result, so the next teaching session can rewrite what confused you and choose the next lesson.
+- Teaches from the page: buttons on the course home page write the next lesson, update lessons from your questions, refresh a copied source folder, and fix whatever the course check finds.
 - Light and dark, on any screen from a phone to a wide monitor.
 
 ## Use it

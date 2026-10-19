@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import select
+import shlex
 import shutil
 import signal
 import socket
@@ -33,6 +34,8 @@ from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+import sync_course  # the scripts folder is on the path when serve.py runs
 
 SKILL = Path(__file__).resolve().parent.parent
 TIERS = {"quick": ("sonnet", "low"), "deep": ("opus", "high")}
@@ -54,6 +57,16 @@ KIND_TASK = {
              "went off. Under 120 words.",
 }
 READ_TOOLS = ["Read", "Grep", "Glob"]
+# Teaching sessions started from the course page. Each runs Claude with edit rights inside the course folder only.
+TEACH_TASKS = {
+    "next": "Write the next lesson in the syllabus (index.html shows which one is next), then update index.html, "
+            "the reference sheets and reference/carry-over.html to match.",
+    "update": "Work through the questions and quiz results not yet handled (section 6, Use the questions): rewrite "
+              "the passages they point to, write learning records, update NOTES.md, and mark each thread handled. "
+              "Do not write a new lesson.",
+    "fix": "The course check failed with the problems below. Fix them in the course files.",
+}
+TEACH_ACTIONS = (*TEACH_TASKS, "refresh")
 MAX_BODY = 1_000_000
 MAX_SOURCE = 512_000
 REVIEW_DAYS = (1, 3, 7)  # wait after a miss, by rights in a row since it; the third right retires the question
@@ -85,6 +98,7 @@ class Course:
         self.lock = threading.Lock()
         self.busy = set()  # threads with an answer still streaming
         self.live = set()  # running claude processes, stopped if the server stops
+        self.job = None  # the latest teaching job started from the course page
 
     # Question log
 
@@ -118,7 +132,7 @@ class Course:
         out = []
         for tid, msgs in by_thread.items():
             first = msgs[0]
-            if tid in deleted or (lesson and first.get("lesson") != lesson):
+            if tid in deleted or (lesson is not None and first.get("lesson") != lesson):
                 continue
             out.append({"thread": tid, "lesson": first.get("lesson"), "kind": first.get("kind"),
                         "mode": first.get("mode"), "topic": first.get("topic"), "anchor": first.get("anchor"),
@@ -185,6 +199,7 @@ class Course:
         deep_web = tier == "deep" and self.web
         cmd = [self.claude, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                "--model", model, "--effort", effort, "--permission-mode", "dontAsk", "--strict-mcp-config",
+               "--setting-sources", "user",
                "--append-system-prompt", self.system_prompt(),
                "--tools", *READ_TOOLS, *(["WebFetch"] if deep_web else [])]
         if deep_web:
@@ -204,6 +219,8 @@ class Course:
             return f"Looking for {args.get('pattern', '')}"
         if name == "WebFetch":
             return f"Fetching {args.get('url', '')}"
+        if name in ("Edit", "Write"):
+            return f"{'Editing' if name == 'Edit' else 'Writing'} {self.short(args.get('file_path', ''))}"
         return f"Using {name}"
 
     def short(self, path):
@@ -222,7 +239,7 @@ class Course:
         """Stream one Claude run through send(event, data). Returns a result dict, or None if the reader left."""
         started = time.time()
         proc = subprocess.Popen(cmd, cwd=self.ws, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True)
+                                stderr=subprocess.PIPE, text=True, start_new_session=True)
         err = []
         with self.lock:
             self.live.add(proc)
@@ -332,6 +349,156 @@ class Course:
         send("done", {"thread": thread, "model": result["model"], "cost_usd": result["cost_usd"],
                       "ms_first_word": result["ms_first_word"], "ms_total": result["ms_total"]})
 
+    # Teaching from the course page
+
+    def settings(self):
+        try:
+            data = json.loads(read_text(self.ws / "course.json") or "{}")
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def teach_command(self):
+        model, effort = TIERS["deep"]
+        ws = re.sub(r"([\\*?\[\]])", r"\\\1", str(self.ws))
+        guard = shlex.join([sys.executable, "-I", str(SKILL / "scripts" / "teach_guard.py"), str(self.ws)])
+        settings = {"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit",
+                                            "hooks": [{"type": "command", "command": guard}]}]}}
+        cmd = [self.claude, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+               "--model", model, "--effort", effort, "--permission-mode", "dontAsk", "--strict-mcp-config",
+               "--setting-sources", "user", "--settings", json.dumps(settings),
+               "--tools", *READ_TOOLS, "Edit", "Write", *(["WebFetch"] if self.web else []),
+               "--allowedTools", f"Edit(/{ws}/**)", f"Write(/{ws}/**)", *[f"WebFetch(domain:{d})" for d in self.web],
+               "--disallowedTools", *[f"{t}(/{ws}/{f})" for t in ("Edit", "Write") for f in ("course.json", ".serve.json")],
+               "--add-dir", str(SKILL)]
+        if self.code:
+            cmd += ["--add-dir", str(self.code)]
+        return cmd
+
+    def teach_prompt(self, action, problems):
+        lines = [
+            f"Run one visual-teach teaching session for the course in {self.ws}, started from the course page.",
+            f"Read {SKILL / 'SKILL.md'} and follow it, with these differences:",
+            "- The server has already synced the course's shared files, and it runs the course check after you finish.",
+            "- You have no shell: run no script and take no screenshots. Read and edit files only.",
+            "- Edit only files inside the course folder. To mark a question thread handled, add its meta line "
+            "after the last line of questions.jsonl.",
+            f"Task: {TEACH_TASKS[action]}",
+        ]
+        if problems:
+            lines.append(f"The course check said:\n{problems}")
+        lines.append("End with at most five short lines saying what you changed.")
+        return "\n".join(lines)
+
+    def call(self, cmd, job, cwd, shell=False, timeout=900):
+        proc = subprocess.Popen(cmd, cwd=cwd, shell=shell, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, start_new_session=True)
+        with self.lock:
+            self.live.add(proc)
+        threading.Thread(target=watch, args=(proc, lambda: job["stopped"]), daemon=True).start()
+        try:
+            output, _ = proc.communicate(timeout=timeout)
+            return proc.returncode, output
+        finally:
+            stop(proc)
+            proc.stdout.close()
+            with self.lock:
+                self.live.discard(proc)
+
+    def checkers(self):
+        return [[sys.executable, "-I"],
+                ["uv", "run", "--no-project", "--no-config", "--quiet", "--with", "playwright", "python", "-I"]]
+
+    def check(self, job):
+        """(ok, report) from check_lessons.py; ok is None when no Python with Playwright can be found."""
+        script = str(SKILL / "scripts" / "check_lessons.py")
+        for py in self.checkers():
+            if job["stopped"]:
+                break
+            if not shutil.which(py[0]):
+                continue
+            code, _ = self.call([*py, "-c", "import playwright"], job, cwd=SKILL)
+            if job["stopped"]:
+                break
+            if code:
+                continue
+            code, output = self.call([*py, script, str(self.ws)], job, cwd=SKILL)
+            return code == 0, output.strip()[-3000:]
+        return None, "Checks skipped: no Python with Playwright was found."
+
+    def start_job(self, action):
+        """Start a teaching job in the background. Returns an HTTP status and the job."""
+        refresh = self.settings().get("refresh")
+        with self.lock:
+            last = self.job
+            if last and last["state"] == "running":
+                return 409, "A teaching job is already running."
+            problems = (last or {}).get("check") or {}
+            if action == "fix" and problems.get("ok") is not False:
+                return 409, "The last check found nothing to fix."
+            if action == "refresh" and not isinstance(refresh, str):
+                return 404, "This course has no refresh command in course.json."
+            job = {"action": action, "state": "running", "started": now(), "lines": [], "summary": "",
+                   "check": None, "cost_usd": None, "error": None, "stopped": False}
+            self.job = job
+        target = self.refresh_job if action == "refresh" else self.teach_job
+        threading.Thread(target=target, args=(job, refresh if action == "refresh" else problems.get("text")),
+                         daemon=True).start()
+        return 200, job
+
+    def teach_job(self, job, problems):
+        def send(event, data):
+            if event == "status":
+                job["lines"] = (job["lines"] + [data["text"]])[-50:]
+                job["summary"] = ""  # keep only the words after the last step: the closing summary
+            elif event == "delta":
+                job["summary"] += data["text"]
+
+        try:
+            if job["stopped"]:
+                return
+            sync_course.sync(self.ws)
+            if job["stopped"]:
+                return
+            result = self.run(self.teach_command(), self.teach_prompt(job["action"], problems), send,
+                              lambda: job["stopped"])
+            if job["stopped"] or result is None:
+                job["state"] = "stopped"
+                return
+            job["cost_usd"] = result["cost_usd"]
+            if result["returncode"] != 0 or result.get("error"):
+                job["error"] = result.get("error") or result["stderr"][-300:] or f"claude exited {result['returncode']}"
+                job["state"] = "failed"
+                return
+            job["lines"].append("Checking the course")
+            ok, report = self.check(job)
+            job["check"] = {"ok": ok, "text": report}
+            job["state"] = "stopped" if job["stopped"] else "done"
+        except Exception as exc:  # a job that dies must still say so on the page
+            job["error"], job["state"] = str(exc), "failed"
+        finally:
+            if job["stopped"]:
+                job["state"] = "stopped"
+
+    def refresh_job(self, job, command):
+        try:
+            if job["stopped"]:
+                return
+            code, output = self.call(command, job, shell=True, cwd=Path.home())
+            job["lines"] = output.strip().splitlines()[-20:]
+            job["state"] = "stopped" if job["stopped"] else ("done" if code == 0 else "failed")
+            if code:
+                job["error"] = f"The refresh command exited {code}"
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            job["error"], job["state"] = str(exc), "failed"
+        finally:
+            if job["stopped"]:
+                job["state"] = "stopped"
+
+    def job_view(self):
+        job = self.job
+        return {k: v for k, v in job.items() if k != "stopped"} if job else None
+
     def topics(self):
         index = read_text(self.ws / "index.html")
         syllabus = re.search(r'<ol class="syllabus">(.*?)</ol>', index, re.S)
@@ -434,12 +601,18 @@ def watch(proc, gone):
 
 
 def stop(proc):
-    # SIGTERM, not SIGINT: a process started in the background often has SIGINT ignored.
     try:
-        proc.terminate()
-        proc.wait(timeout=3)
-    except (subprocess.TimeoutExpired, OSError):
-        proc.kill()
+        os.killpg(proc.pid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            # A child can outlive its parent or ignore SIGTERM.
+            os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -471,9 +644,15 @@ class Handler(SimpleHTTPRequestHandler):
         if real != self.course.ws and self.course.ws not in real.parents:
             self.send_error(404, "Not in this course")
             return None
+        self.course_html = real.is_file() and real.suffix.lower() == ".html" or (
+            real.is_dir() and urlparse(self.path).path.endswith("/"))
         return super().send_head()
 
     def end_headers(self):
+        if getattr(self, "course_html", False):
+            host = self.headers.get("Host")
+            scripts = " ".join(f"http://{host}/assets/{name}.js" for name in ("theme", "quiz", "ask"))
+            self.send_header("Content-Security-Policy", f"script-src {scripts}; object-src 'none'; base-uri 'none'")
         if getattr(self, "set_cookie", False):
             self.send_header("Set-Cookie", f"{COOKIE}={self.server.token}; Path=/; HttpOnly; SameSite=Strict")
         super().end_headers()
@@ -488,7 +667,8 @@ class Handler(SimpleHTTPRequestHandler):
                               "web": course.web, "code": str(course.code) if course.code else None,
                               "lan": bool(self.server.token)})
         if url.path == "/api/threads":
-            lesson = parse_qs(url.query).get("lesson", [None])[0]
+            # keep_blank_values: the course home page is the lesson "", not a request for every lesson
+            lesson = parse_qs(url.query, keep_blank_values=True).get("lesson", [None])[0]
             return self.json({"threads": course.threads(lesson)})
         if url.path == "/api/topics":
             return self.json({"topics": course.topics()})
@@ -497,6 +677,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json(data) if status == 200 else self.send_error(status)
         if url.path == "/api/review":
             return self.json(course.review())
+        if url.path == "/api/teach":
+            return self.json({"allowed": self.local(), "refresh": isinstance(course.settings().get("refresh"), str),
+                              "job": course.job_view()})
         super().do_GET()
 
     def do_HEAD(self):
@@ -532,6 +715,17 @@ class Handler(SimpleHTTPRequestHandler):
             course.append({"t": now(), "lesson": body["lesson"], "quiz": body["quiz"], "type": body.get("type"),
                            "q": body.get("q"), "right": right if isinstance(right, bool) else None}, course.quiz_log)
             return self.json({"ok": True})
+        if path in ("/api/teach", "/api/teach/stop"):
+            if not self.local():
+                return self.send_error(403, "Teaching runs only from this computer")
+            if path == "/api/teach/stop":
+                if course.job:
+                    course.job["stopped"] = True
+                return self.json({"ok": True})
+            if body.get("action") not in TEACH_ACTIONS:
+                return self.send_error(400, "Unknown action")
+            status, job = course.start_job(body["action"])
+            return self.json({"job": course.job_view()}) if status == 200 else self.send_error(status, job)
         if path != "/api/ask":
             return self.send_error(404)
         if body.get("kind") not in KIND_TASK:
@@ -549,6 +743,14 @@ class Handler(SimpleHTTPRequestHandler):
             course.ask(body, send, self.reader_gone)
         except OSError:
             pass
+
+    def local(self):
+        """True for a request from this computer. Teaching edits files and costs money, so the phone link can't."""
+        try:
+            host = urlparse("//" + (self.headers.get("Host") or "")).hostname
+        except ValueError:
+            return False
+        return self.client_address[0] in ("127.0.0.1", "::1") and host in ("localhost", "127.0.0.1", "::1")
 
     def reader_gone(self):
         """True once the browser has closed the connection (it sends nothing after its request)."""

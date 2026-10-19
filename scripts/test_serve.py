@@ -6,6 +6,7 @@ Usage: python3 test_serve.py
 import http.client
 import json
 import os
+import shlex
 import shutil
 import socket
 import stat
@@ -67,6 +68,48 @@ def make_workspace(root):
     (root / "lessons/one.html").write_text("<main><p>The runner hands out jobs.</p></main>")
     (root / "MISSION.md").write_text("# Mission: test mission\n")
     (root / "NOTES.md").write_text("Analogy: the runner is the office manager.\n")
+
+
+class GuardTest(unittest.TestCase):
+    """teach_guard.py: the hook that keeps a teaching session's edits inside the course."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name).resolve()
+        self.ws = base / "course"
+        (self.ws / "lessons").mkdir(parents=True)
+        (self.ws / "assets").mkdir()
+        (base / "outside").mkdir()
+        (self.ws / "lessons" / "escape").symlink_to(base / "outside")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def guard(self, event):
+        return subprocess.run([sys.executable, "-I", str(HERE / "teach_guard.py"), str(self.ws)],
+                              input=event if isinstance(event, str) else json.dumps(event),
+                              capture_output=True, text=True).returncode
+
+    def edit(self, path, tool="Edit"):
+        return self.guard({"tool_name": tool, "tool_input": {"file_path": str(path)}, "cwd": str(self.ws)})
+
+    def test_lessons_may_be_edited(self):
+        self.assertEqual(self.edit(self.ws / "lessons" / "0002-new.html", "Write"), 0)
+        self.assertEqual(self.edit("lessons/0001-x.html"), 0, "relative to the session's folder")
+        self.assertEqual(self.edit(self.ws / "assets" / "course.css"), 0)
+
+    def test_everything_else_is_blocked(self):
+        for path in (self.ws.parent / "outside" / "x.txt", self.ws / "lessons" / "escape" / "x.html",
+                     self.ws / "lessons" / ".." / ".." / "x", self.ws / "course.json", self.ws / ".serve.json",
+                     self.ws / ".claude" / "settings.json", self.ws / "CLAUDE.md", self.ws / "assets" / "ask.js",
+                     # A Mac's disk ignores case, so these name the same protected files.
+                     self.ws / "Course.json", self.ws / "claude.md", self.ws / ".Claude" / "settings.json",
+                     self.ws / "ASSETS" / "ask.js", self.ws / "Assets" / "Course.CSS" / ".." / "ask.js"):
+            self.assertEqual(self.edit(path), 2, path)
+
+    def test_anything_unexpected_blocks(self):
+        self.assertEqual(self.guard("not json"), 2)
+        self.assertEqual(self.guard({"tool_name": "Edit", "tool_input": {}}), 2)
 
 
 class ServeTest(unittest.TestCase):
@@ -326,6 +369,11 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(json.loads(data)["threads"], [])
         self.assertEqual(self.records()[-1]["event"], "deleted")
 
+    def test_threads_for_a_blank_page_name_are_its_own(self):
+        self.ask()
+        _, data = self.request("GET", "/api/threads?lesson=")
+        self.assertEqual(json.loads(data)["threads"], [], "a blank page name is a page, not every page")
+
     def test_topics_from_syllabus(self):
         _, data = self.request("GET", "/api/topics")
         topics = json.loads(data)["topics"]
@@ -348,6 +396,155 @@ class ServeTest(unittest.TestCase):
         conn.close()
         resp, _ = self.request("GET", "/api/ping", headers={"Host": "evil.example"})
         self.assertEqual(resp.status, 403, "DNS rebinding: unknown Host refused on localhost mode")
+
+    # Teaching from the course page
+
+    def teach(self, action):
+        return self.request("POST", "/api/teach", {"action": action})
+
+    def teach_status(self):
+        return json.loads(self.request("GET", "/api/teach")[1])
+
+    def wait_job(self, timeout=20):
+        end = time.time() + timeout
+        while time.time() < end:
+            job = self.teach_status()["job"]
+            if job and job["state"] != "running":
+                return job
+            time.sleep(0.1)
+        self.fail("the teaching job did not finish")
+
+    @staticmethod
+    def flag_values(argv, flag):
+        i = argv.index(flag) + 1
+        out = []
+        while i < len(argv) and not argv[i].startswith("--"):
+            out.append(argv[i])
+            i += 1
+        return out
+
+    def test_teach_edits_only_inside_the_course(self):
+        self.server.course.check = lambda *_: (True, "ok: 1 pages, 1 lessons")
+        self.assertTrue(self.teach_status()["allowed"])
+        resp, _ = self.teach("next")
+        self.assertEqual(resp.status, 200)
+        job = self.wait_job()
+        self.assertEqual(job["state"], "done")
+        self.assertIn("office manager", job["summary"])
+        self.assertEqual(job["check"], {"ok": True, "text": "ok: 1 pages, 1 lessons"})
+        call = self.calls()[-1]
+        argv, ws = call["argv"], str(self.ws.resolve())
+        tools = self.flag_values(argv, "--tools")
+        self.assertIn("Edit", tools)
+        self.assertIn("Write", tools)
+        self.assertNotIn("Bash", argv, "no shell: the server runs every script itself")
+        self.assertEqual(argv[argv.index("--model") + 1], "opus")
+        allowed = self.flag_values(argv, "--allowedTools")
+        self.assertIn(f"Edit(/{ws}/**)", allowed)
+        self.assertIn(f"Write(/{ws}/**)", allowed)
+        denied = self.flag_values(argv, "--disallowedTools")
+        for tool in ("Edit", "Write"):  # course.json holds the refresh command, which the server runs as a shell command
+            self.assertIn(f"{tool}(/{ws}/course.json)", denied)
+        dirs = [argv[i + 1] for i, a in enumerate(argv) if a == "--add-dir"]
+        self.assertIn(str(serve.SKILL), dirs)
+        self.assertIn(str(self.code.resolve()), dirs)
+        self.assertIn("SKILL.md", call["stdin"])
+        self.assertIn("next lesson", call["stdin"])
+        # Rules alone are not enough: a user's own settings may allow Edit everywhere, so a hook checks every path.
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "user", "no settings planted in the course")
+        hooks = json.loads(argv[argv.index("--settings") + 1])["hooks"]["PreToolUse"]
+        self.assertIn("teach_guard.py", hooks[0]["hooks"][0]["command"])
+        self.assertIn("Edit", hooks[0]["matcher"])
+        self.assertIn("Write", hooks[0]["matcher"])
+
+    def test_answers_ignore_settings_planted_in_the_course(self):
+        self.ask()
+        argv = self.calls()[0]["argv"]
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "user")
+
+    def test_permission_rules_escape_the_course_path(self):
+        self.server.course.ws = Path("/tmp/course[1]")
+        argv = self.server.course.teach_command()
+        self.assertIn("Edit(//tmp/course\\[1\\]/**)", self.flag_values(argv, "--allowedTools"))
+
+    def test_course_pages_run_only_the_shared_scripts(self):
+        resp, _ = self.request("GET", "/lessons/one.html")
+        csp = resp.getheader("Content-Security-Policy") or ""
+        for name in ("theme.js", "quiz.js", "ask.js"):
+            self.assertIn(f"http://localhost:{self.port}/assets/{name}", csp)
+        self.assertNotIn("unsafe-inline", csp)
+        self.assertIn("base-uri 'none'", csp)
+
+    def test_check_never_imports_from_the_course(self):
+        for prefix in self.server.course.checkers():
+            self.assertIn("-I", prefix, "isolated: no course file can shadow an import")
+            if prefix[0] == "uv":
+                self.assertIn("--no-project", prefix)
+                self.assertIn("--no-config", prefix)
+
+    def test_stop_ends_a_running_check(self):
+        course = self.server.course
+        course.check = lambda job: course.call(["sleep", "30"], job, cwd=self.ws)
+        self.teach("next")
+        end = time.time() + 15
+        while "Checking the course" not in ((self.teach_status()["job"] or {}).get("lines") or []):
+            self.assertLess(time.time(), end, "the job never reached its check")
+            time.sleep(0.1)
+        started = time.time()
+        self.request("POST", "/api/teach/stop", {})
+        self.assertEqual(self.wait_job()["state"], "stopped")
+        self.assertLess(time.time() - started, 6)
+
+    def test_teach_one_job_at_a_time_and_stop(self):
+        os.environ["FAKE_CLAUDE_SLOW"] = "1"
+        self.server.course.check = lambda *_: (True, "ok")
+        self.assertEqual(self.teach("next")[0].status, 200)
+        self.assertEqual(self.teach("update")[0].status, 409)
+        self.assertEqual(self.request("POST", "/api/teach/stop", {})[0].status, 200)
+        self.assertEqual(self.wait_job()["state"], "stopped")
+        self.assertEqual(self.teach("nonsense")[0].status, 400)
+
+    def test_teach_fix_sends_the_check_problems(self):
+        self.server.course.check = lambda *_: (False, "0001-x.html: sentence over 25 words")
+        self.teach("next")
+        job = self.wait_job()
+        self.assertFalse(job["check"]["ok"])
+        self.teach("fix")
+        self.wait_job()
+        self.assertIn("sentence over 25 words", self.calls()[-1]["stdin"])
+
+    def test_refresh_runs_the_course_command(self):
+        self.assertFalse(self.teach_status()["refresh"])
+        self.assertEqual(self.teach("refresh")[0].status, 404)
+        out = self.ws / "refreshed.txt"
+        (self.ws / "course.json").write_text(json.dumps({"refresh": f"pwd > {shlex.quote(str(out))}"}))
+        self.assertTrue(self.teach_status()["refresh"])
+        self.teach("refresh")
+        self.assertEqual(self.wait_job()["state"], "done")
+        # It runs from the home folder, so a relative path can never reach a file a teaching session wrote.
+        self.assertEqual(Path(out.read_text().strip()).resolve(), Path.home().resolve())
+
+    @unittest.skipIf(serve.lan_address() == "127.0.0.1", "no network address to test from")
+    def test_teach_only_from_this_mac(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.start(lan=True)
+        ip = serve.lan_address()
+        conn = http.client.HTTPConnection(ip, self.port, timeout=10)
+        conn.request("GET", f"/api/teach?k={self.server.token}", headers={"Host": f"{ip}:{self.port}"})
+        resp = conn.getresponse()
+        status = json.loads(resp.read())
+        conn.close()
+        self.assertFalse(status["allowed"])
+        conn = http.client.HTTPConnection(ip, self.port, timeout=10)
+        conn.request("POST", f"/api/teach?k={self.server.token}", body=json.dumps({"action": "next"}),
+                     headers={"Host": f"{ip}:{self.port}", "Content-Type": "application/json"})
+        self.assertEqual(conn.getresponse().status, 403)
+        conn.close()
+        # A page from another site that points its name at this computer has the token's cookie but not our name.
+        resp, _ = self.request("POST", f"/api/teach?k={self.server.token}", {"action": "next"},
+                               headers={"Host": f"evil.example:{self.port}", "Origin": f"http://evil.example:{self.port}"})
+        self.assertEqual(resp.status, 403)
 
     def test_lan_mode_needs_token(self):
         self.server.shutdown()

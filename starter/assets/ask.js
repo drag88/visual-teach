@@ -66,11 +66,22 @@
     if (code) {
       for (const el of main.querySelectorAll(".src")) {
         const c = citeOf(el);
-        if (c) el.replaceChildren(Object.assign(button(el.textContent.trim(), () => openSource(c.path, c.start, c.end, blockOf(el))), { className: "ask-cite" }));
+        if (!c) continue;
+        // A link, not a button: a button never breaks across lines, which strands a "(" before it.
+        const link = Object.assign(node("a", "ask-cite"), { href: "#", textContent: el.textContent.trim() });
+        link.setAttribute("role", "button");
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          openSource(c.path, c.start, c.end, blockOf(el));
+        });
+        el.replaceChildren(link);
       }
     }
     document.addEventListener("quiz", onQuiz);
-    if (/^\/(index\.html)?$/.test(location.pathname)) showReview();
+    if (/^\/(index\.html)?$/.test(location.pathname)) {
+      showReview();
+      showTeach();
+    }
   }
 
   let topicsLoaded = false;
@@ -653,6 +664,98 @@
       head.textContent = "Review";
       lists[lists.length - 1].after(head, list);
     }).catch(() => {});
+  }
+
+  // Teaching from the course home page: start a session, follow its steps, then see the course check.
+  // The job runs on the server, so it carries on if this page is closed; the page checks on it while open.
+
+  const TEACH_LABEL = {
+    next: "Teach the next lesson", update: "Update lessons from my questions",
+    refresh: "Refresh the source copy", fix: "Fix the check problems",
+  };
+  let teachTimer = 0;
+
+  function showTeach() {
+    fetch("/api/teach").then((r) => r.json()).then((info) => {
+      if (!info.allowed) return;
+      const box = node("section", "ask-teach");
+      const head = node("h2");
+      head.textContent = "Teaching";
+      const note = node("p", "ask-teach-note");
+      note.textContent = "Runs a teaching session with Claude (Opus) in this course's folder. "
+        + "It takes about 5 to 15 minutes and keeps going if you close the page.";
+      const actions = node("div", "ask-teach-actions");
+      for (const action of ["next", "update", ...(info.refresh ? ["refresh"] : [])]) {
+        actions.append(button(TEACH_LABEL[action], () => startTeach(box, action)));
+      }
+      box.append(head, note, actions, node("div", "ask-teach-status"));
+      const footer = main.querySelector("footer");
+      if (footer) footer.before(box);
+      else main.append(box);
+      renderTeach(box, info.job);
+    }).catch(() => {});
+  }
+
+  function startTeach(box, action) {
+    post("/api/teach", { action })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("the server answered " + r.status))))
+      .then(({ job }) => renderTeach(box, job))
+      .catch(async (err) => {
+        try {
+          const info = await fetch("/api/teach").then((r) => r.json());
+          renderTeach(box, info.job);
+        } catch (_) { /* Keep the start error visible if the status request also fails. */ }
+        const line = node("p", "ask-error");
+        line.textContent = "Could not start: " + err.message;
+        box.querySelector(".ask-teach-status").prepend(line);
+      });
+  }
+
+  function pollTeach(box) {
+    clearTimeout(teachTimer);
+    fetch("/api/teach").then((r) => r.json()).then(({ job }) => renderTeach(box, job))
+      .catch(() => { teachTimer = setTimeout(() => pollTeach(box), 4000); });
+  }
+
+  function renderTeach(box, job) {
+    const running = Boolean(job && job.state === "running");
+    box.querySelectorAll(".ask-teach-actions button").forEach((b) => { b.disabled = running; });
+    const status = box.querySelector(".ask-teach-status");
+    status.replaceChildren();
+    if (!job) return;
+    const when = new Date(job.started).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const state = node("p", "ask-teach-state");
+    state.textContent = `${TEACH_LABEL[job.action]}: ${job.state} (started ${when})`
+      + (job.cost_usd != null ? ` · ≈$${Number(job.cost_usd).toFixed(2)}` : "");
+    status.append(state);
+    if (job.lines.length) {
+      const log = node("ol", "ask-teach-log");
+      for (const text of job.lines.slice(running ? -6 : -3)) log.append(Object.assign(node("li"), { textContent: text }));
+      status.append(log);
+    }
+    if (running) {
+      status.append(button("Stop", () => post("/api/teach/stop", {}).then(() => pollTeach(box)).catch(() => {})));
+      teachTimer = setTimeout(() => pollTeach(box), 2000);
+      return;
+    }
+    if (job.summary.trim()) {
+      const summary = node("div", "ask-teach-summary");
+      summary.innerHTML = md(job.summary.trim());
+      status.append(summary);
+    }
+    if (job.error) status.append(Object.assign(node("p", "ask-error"), { textContent: job.error }));
+    if (job.check) {
+      const check = node("pre", "ask-teach-check");
+      check.textContent = job.check.text;
+      status.append(check);
+      if (job.check.ok === false) status.append(button("Ask Claude to fix these", () => startTeach(box, "fix")));
+    }
+    if (job.state === "done") {
+      const reload = node("a");
+      reload.href = location.href;
+      reload.textContent = "Reload to see the changes";
+      status.append(reload);
+    }
   }
 
   // Where cards go: the right margin on wide screens, under the paragraph otherwise.

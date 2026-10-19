@@ -23,7 +23,7 @@ main > .ask-flash { animation: ask-flash 1.4s ease-out; }
 
 /* Hint shown when the lesson is opened without the server */
 .ask-hint { font-family: var(--sans); font-size: 0.72rem; color: var(--muted); margin: 3rem 0 0; text-align: center; }
-@media print { .ask-hint, .ask-bar, .ask-sel, .ask-panel { display: none !important; } }
+@media print { .ask-hint, .ask-bar, .ask-sel, .ask-panel, .ask-teach { display: none !important; } }
 
 /* Bar that appears over a highlight */
 .ask-sel {
@@ -119,6 +119,22 @@ body.ask-hidden main > .has-ask::after { display: none; }
 }
 .ask-show:hover, .ask-show:focus-visible { color: var(--ink); }
 
+/* Teaching from the course home page (ask.js showTeach) */
+.ask-teach { margin: 3rem 0 0; padding-top: 0.4rem; border-top: 1px solid var(--rule); }
+.ask-teach-note { color: var(--muted); font-size: 0.88rem; }
+.ask-teach-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 1rem; }
+.ask-teach button {
+  font: inherit; font-size: 0.9rem; color: var(--ink); background: transparent;
+  border: 1px solid var(--rule); border-radius: 2px; padding: 0.5rem 0.8rem; cursor: pointer;
+}
+.ask-teach button:hover:not(:disabled) { border-color: var(--muted); }
+.ask-teach button:disabled { color: var(--muted); cursor: default; }
+.ask-teach-state { font-size: 0.85rem; color: var(--muted); margin: 0 0 0.4rem; }
+.ask-teach-log { list-style: none; padding: 0; margin: 0 0 0.8rem; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
+.ask-teach-log li { margin: 0; overflow-wrap: anywhere; }
+.ask-teach-summary { font-size: 0.92rem; }
+.ask-teach-check { font-size: 0.75rem; margin: 0.6rem 0; }
+
 /* Ask about the whole lesson */
 body.ask-on { padding-bottom: 5rem; }
 .ask-bar {
@@ -154,8 +170,8 @@ body.ask-on { padding-bottom: 5rem; }
 
 /* Source citations (path:12-20) open the source panel when the course has a source folder. */
 .src .ask-cite {
-  font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
-  text-decoration: underline dotted; text-underline-offset: 3px;
+  color: inherit; cursor: pointer; overflow-wrap: anywhere;
+  text-decoration: underline dotted; text-decoration-color: currentColor; text-underline-offset: 3px;
 }
 .src .ask-cite:hover, .src .ask-cite:focus-visible { color: var(--accent); }
 

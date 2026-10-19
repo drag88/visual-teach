@@ -42,6 +42,8 @@ def build_workspace(root):
     shutil.copytree(STARTER / "assets", root / "assets")
     (root / "lessons").mkdir()
     lesson = (STARTER / "lesson.html").read_text().replace("<h2>Practice</h2>", FILLER + EXTRA + "<h2>Practice</h2>", 1)
+    # Lesson files are written by teaching sessions, so a script inside one must never run when served.
+    lesson = lesson.replace("<footer>", '<script>window.pwned = 1</script><img src="x" onerror="window.pwned = 2" alt="">\n<footer>', 1)
     (root / "lessons/0001-lesson.html").write_text(lesson)
     shutil.copy(STARTER / "index.html", root / "index.html")
     (root / "NOTES.md").write_text("Analogy: the runner is the office manager.\n")
@@ -95,6 +97,8 @@ def run(width_name, width, base, shots):
         url = f"{base}/lessons/0001-lesson.html"
         pg.goto(url)
         pg.wait_for_selector("body.ask-on")
+        if pg.evaluate("window.pwned"):
+            problems.append(f"{width_name}: a script written into a lesson ran")
         para = "main > h2 + p"
         assert pg.locator("main > [data-p]").count() >= 5, "paragraphs are numbered"
         if pg.locator(".ask-cite").count():
@@ -151,6 +155,15 @@ def run(width_name, width, base, shots):
             problems.append(f"{width_name}: page scrolls sideways")
         if shots:
             pg.screenshot(path=str(shots / f"reader-{width_name}.png"), full_page=True)
+
+        # The course home page shows its own questions only, not every lesson's.
+        pg.goto(f"{base}/")
+        pg.wait_for_selector("body.ask-on")
+        pg.wait_for_timeout(500)
+        if pg.locator(".ask-card").count():
+            problems.append(f"{width_name}: the course home page shows {pg.locator('.ask-card').count()} cards from lessons")
+        pg.goto(url)
+        pg.wait_for_selector("body.ask-on")
 
         pg.reload()
         pg.wait_for_function("document.querySelectorAll('.ask-card').length === 2")
@@ -262,9 +275,8 @@ def check_sources(width_name, width, base, ws, log, shots):
         pg.keyboard.press("Escape")
         if pg.locator(".ask-panel[open]").count():
             problems.append(f"{width_name}: Escape did not close the panel")
-        try:  # the dialog's close event comes a moment after Escape
-            pg.wait_for_function("[...document.querySelectorAll('main .ask-card .ask-kind')].some((k) => k.textContent === 'Walk through')",
-                                 timeout=3000)
+        try:  # the dialog's close event comes a moment after Escape. A locator wait, since the page's CSP forbids eval
+            pg.locator("main .ask-card .ask-kind", has_text="Walk through").first.wait_for(timeout=3000)
         except Exception:
             problems.append(f"{width_name}: walk answer did not return to the lesson when the panel closed")
 
@@ -286,6 +298,10 @@ def check_sources(width_name, width, base, ws, log, shots):
         pg.locator(".ask-card", has=pg.locator(".ask-kind", has_text="Where else")).locator(".ask-meta", has_text="first words").wait_for()
         if "of src/app.py" not in last_stdin(log):
             problems.append(f"{width_name}: a selection in quoted code did not name its source")
+
+        # An inline citation flows with its sentence, so a "(" before it never ends a line on its own.
+        if pg.evaluate("getComputedStyle(document.querySelector('code.src .ask-cite')).display") != "inline":
+            problems.append(f"{width_name}: inline citations do not wrap with their sentence")
 
         # A private file shows one plain line and none of its content.
         pg.locator("code.src .ask-cite").click()
@@ -436,6 +452,60 @@ def check_theme(base):
     return problems
 
 
+def check_teaching(base, course, shots):
+    """The course home page starts teaching sessions, shows their progress and check, and offers a fix."""
+    problems = []
+    os.environ.pop("FAKE_TEXT", None)  # the default fake answer, not the hostile one this server started with
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        for name, width in (("phone", 390), ("desktop", 1280)):
+            course.check = lambda *_: (True, "ok: 3 pages, 1 lessons")
+            pg = browser.new_page(viewport={"width": width, "height": 900})
+            pg.goto(f"{base}/")
+            pg.wait_for_selector(".ask-teach button")
+            labels = pg.locator(".ask-teach button").all_inner_texts()
+            if labels != ["Teach the next lesson", "Update lessons from my questions"]:
+                problems.append(f"teaching ({name}): buttons are {labels}")
+            pg.locator(".ask-teach button", has_text="Teach the next lesson").click()
+            pg.locator(".ask-teach-summary", has_text="office manager").wait_for()
+            pg.locator(".ask-teach-check", has_text="ok: 3 pages").wait_for()
+            if pg.locator(".ask-teach button:disabled").count():
+                problems.append(f"teaching ({name}): buttons stay disabled after the job")
+            if not pg.locator(".ask-teach a", has_text="Reload").count():
+                problems.append(f"teaching ({name}): no way to see the updated pages")
+            course.check = lambda *_: (False, "0001-lesson.html: sentence over 25 words")
+            pg.locator(".ask-teach button", has_text="Update lessons").click()
+            fix = pg.locator(".ask-teach button", has_text="Ask Claude to fix these")
+            fix.wait_for()
+            pg.locator(".ask-teach-check", has_text="sentence over 25 words").wait_for()
+            course.check = lambda *_: (True, "ok")
+            fix.click()
+            pg.locator(".ask-teach-check", has_text="ok").wait_for()
+            if pg.evaluate("document.documentElement.scrollWidth > window.innerWidth"):
+                problems.append(f"teaching ({name}): page scrolls sideways")
+            if shots:
+                pg.locator(".ask-teach").screenshot(path=str(shots / f"teaching-{name}.png"))
+            other = browser.new_page(viewport={"width": width, "height": 900})
+            other.goto(f"{base}/")
+            other.wait_for_selector(".ask-teach button")
+            os.environ["FAKE_CLAUDE_SLOW"] = "1"
+            pg.evaluate("""fetch('/api/teach', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'next'})})""")
+            other.locator(".ask-teach-actions button", has_text="Teach the next lesson").click()
+            try:
+                other.locator(".ask-teach button", has_text="Stop").wait_for(timeout=5000)
+            except Exception:
+                problems.append(f"teaching ({name}): a second tab did not show the job already running")
+            else:
+                other.locator(".ask-teach button", has_text="Stop").click()
+            os.environ.pop("FAKE_CLAUDE_SLOW", None)
+            other.locator(".ask-teach-state", has_text="stopped").wait_for(timeout=15000)
+            other.close()
+            pg.close()
+        browser.close()
+    return problems
+
+
 def main():
     shots = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else None
     if shots:
@@ -485,6 +555,7 @@ def main():
         try:
             problems += check_answers_are_inert(f"http://localhost:{server.server_address[1]}")
             problems += check_theme(f"http://localhost:{server.server_address[1]}")
+            problems += check_teaching(f"http://localhost:{server.server_address[1]}", server.course, shots)
         finally:
             os.environ.pop("FAKE_TEXT", None)
             server.shutdown()
@@ -493,7 +564,7 @@ def main():
         print("\n".join(problems))
         sys.exit(1)
     print("ok: highlight, stream, follow-up, whole-page ask, reload and delete at", ", ".join(WIDTHS),
-          "+ source panel, code actions, Check my answer and review at " + ", ".join(SOURCE_WIDTHS) + " + hostile answers render inert + theme switch")
+          "+ source panel, code actions, Check my answer and review at " + ", ".join(SOURCE_WIDTHS) + " + hostile answers render inert + theme switch + teaching from the page")
 
 
 if __name__ == "__main__":

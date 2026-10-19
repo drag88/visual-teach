@@ -50,11 +50,13 @@ def link_assets(page, ws):
 
 def sync(ws):
     ws = Path(ws).expanduser().resolve()
+    if (ws / "assets").is_symlink():
+        raise ValueError("Cannot sync: assets is a symlink.")
     (ws / "assets").mkdir(exist_ok=True)
     changed = drifted(ws)
     for name in changed:
         shutil.copy(SKILL / "starter" / "assets" / name, ws / "assets" / name)
-    linked = [p.relative_to(ws) for p in pages(ws) if link_assets(p, ws)]
+    linked = [p.relative_to(ws) for p in pages(ws) if p.resolve().is_relative_to(ws) and link_assets(p, ws)]
     marker = ws / ".diagram-design"
     if not marker.exists():
         marker.write_text("profile: learn\n")
@@ -68,7 +70,10 @@ def sync(ws):
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
-    changed, linked = sync(sys.argv[1])
+    try:
+        changed, linked = sync(sys.argv[1])
+    except ValueError as exc:
+        sys.exit(str(exc))
     print("Updated shared files:", ", ".join(changed) or "none, already current")
     print("Pages now loading them:", ", ".join(map(str, linked)) or "none needed")
 
