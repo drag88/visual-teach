@@ -244,9 +244,10 @@ class SyncParseTest(unittest.TestCase):
         (ws / "lessons").mkdir()
         page = ws / "lessons" / "four.html"
         page.write_text('<html><head><link rel="stylesheet" href="../assets/ask.js"></head><body><main></main>'
-                        '<script src="https://[broken/vendor.js"></script></body></html>')
+                        '<script src="https://[broken/vendor.js"></script><script src="../assets/quiz.js\n"></script></body></html>')
         sync_course.link_assets(page, ws)  # must not raise
         self.assertIn('<script src="../assets/ask.js"></script>', page.read_text(), "a link tag does not run a script")
+        self.assertEqual(page.read_text().count("assets/quiz.js"), 1, "a browser drops the newline, so this loads quiz.js")
         shutil.rmtree(ws)
 
 

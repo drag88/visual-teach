@@ -42,9 +42,9 @@ def drifted(ws):
 
 
 def bare(url):
-    """The path part of a URL, without a query string or fragment. Plain string work: a malformed URL elsewhere
-    on the page must not stop the sync."""
-    return url.split("#", 1)[0].split("?", 1)[0]
+    """The path part of a URL as a browser reads it: tabs and newlines dropped, outer spaces trimmed, no query
+    string or fragment. Plain string work: a malformed URL elsewhere on the page must not stop the sync."""
+    return re.sub(r"[\t\n\r]", "", url).strip().split("#", 1)[0].split("?", 1)[0]
 
 
 class Loaded(HTMLParser):

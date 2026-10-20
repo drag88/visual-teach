@@ -93,7 +93,8 @@ Lessons are read on phones, and diagram-design's default canvas and type are too
 - Inline the `<svg class="dg">` in the lesson inside `<figure class="diagram" id="...">` with a `.scroll` wrapper and a `<figcaption>` that states the claim. On a phone the figure scrolls sideways instead of shrinking its labels.
 - Colour with the stylesheet's classes, never hex, so light and dark both work: `box`, `box ext`, `box focal` for nodes; `t-ink`, `t-muted`, `t-acc` for text; `s-muted`, `s-acc`, `s-ink` for lines; `f-paper`, `f-soft`, `f-muted`, `f-acc` for fills; `mono` for technical labels.
 - Keep GUIDE.md's accessible-SVG contract: `role="img"`, `<title>` first, a one-sentence `<desc>`, ids prefixed with the diagram's slug.
-- Make parts tappable for spot quizzes: wrap each node in `<g data-spot="id">` around its `rect.box`, and each message or edge in `<g data-spot="id">` with a transparent `rect.hit` behind it.
+- Make parts tappable for spot quizzes: wrap each node in `<g data-spot="id">` around its `rect.box`, and each message or edge in `<g data-spot="id">` with a transparent `rect.hit` behind it. In a sequence diagram, put each actor's lifeline and activation bars inside that actor's group too, so a tap on its line counts as the actor.
+- Word a spot question so exactly one part fits, then read every label as the learner would: an arrow from a tool labelled "add to history" makes the tool look like the part that writes the history, so a question about who writes it becomes a trap.
 
 ## 6. Quizzes, and asking while reading
 
