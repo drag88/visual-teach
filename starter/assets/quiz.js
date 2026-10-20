@@ -255,8 +255,10 @@
     const fb = quiz.querySelector(".fb");
     quiz.insertBefore(clone, fb);
     const parts = [...clone.querySelectorAll("g[data-spot]")];
-    const target = parts.find((x) => x.dataset.spot === quiz.dataset.answer);
-    const label = (target && target.querySelector("text")?.textContent.trim()) || quiz.dataset.answer;
+    // The answer may span several groups (a box, and its line and bars drawn under the arrows); the name is the
+    // first text among them.
+    const label = parts.filter((x) => x.dataset.spot === quiz.dataset.answer)
+      .map((x) => x.querySelector("text")?.textContent.trim()).find(Boolean) || quiz.dataset.answer;
     let done = false;
     let tried = false;
     const pick = (g) => {

@@ -31,6 +31,7 @@ LESSON = f"""<!doctype html>
 <div class="opts"><button class="opt" data-right>The step</button><button class="opt">The input</button></div>
 <p class="fb">The step changes things.</p></div>
 <figure id="fig-parts"><div class="scroll"><svg viewBox="0 0 200 60" width="200" height="60">
+<g data-spot="step"><rect class="hit" x="155" y="0" width="10" height="60"/></g>
 <g data-spot="input"><rect class="box" x="0" y="0" width="80" height="60"/></g>
 <g data-spot="step"><rect class="box" x="120" y="0" width="80" height="60"/><text x="140" y="35">Step</text></g></svg></div></figure>
 <div class="quiz spot" id="q-spot" data-from="fig-parts" data-answer="step"><p class="q">Tap the part that does the work.</p>
@@ -103,7 +104,7 @@ def run(lesson):
         if spot.locator(".fb .answer").count() != 1 or not spot.locator(".fb").inner_text().startswith(
                 "The answer is Step, marked in green. The step changes things."):
             problems.append(f"a spot miss did not name the right part: {spot.locator('.fb').inner_text()!r}")
-        problems += [f"spot: {p}" for p in retry(spot, "g[data-spot]", lambda: spot.locator('g[data-spot="step"]').click())]
+        problems += [f"spot: {p}" for p in retry(spot, "g[data-spot]", lambda: spot.locator('g[data-spot="step"]').last.click())]
         if spot.locator(".fb .answer").count():
             problems.append("a right retry still names the answer as if it were a miss")
         graded = score()
