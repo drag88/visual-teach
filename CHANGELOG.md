@@ -11,13 +11,15 @@ Notable changes to visual-teach. Versions follow [semantic versioning](https://s
 
 ### Changed
 
-- Opening a course brings its shared reader files up to date, and restarts its reading server when the server runs older code or another copy of the skill. A running teaching job is never stopped for this; the restart waits for the next open.
+- Opening a course brings its shared reader files up to date, and restarts its reading server when the server runs older code or another copy of the skill. A running teaching job is not stopped for this, and its course files are left as they are; the update waits for the next open.
 - When the server refuses to start a teaching job, the course page says why instead of showing a status number.
 
 ### Fixed
 
 - The opener no longer reports a new server as started while the previous one is still shutting down.
 - Teaching from the course page refuses to run once the skill folder its server started from has been removed, instead of running without its edit guard and checks.
+- Syncing a course replaces a shared file that is a link to somewhere else, instead of overwriting the file it points to.
+- With `--lan`, the link opened on this computer carries the token the server asks for, instead of getting a 401 error.
 
 ## [1.0.0] - 2026-10-19
 

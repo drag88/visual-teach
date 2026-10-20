@@ -52,7 +52,7 @@ class WindowsTest(unittest.TestCase):
         (ws / ".serve.json").write_text(json.dumps({"pid": 4242, "port": 1}))
         # The server answers as this course's, ignores the polite request, and so gets ended.
         self.oc.ping = lambda port, token=None: {"course": str(ws.resolve()), "pid": 4242}
-        self.oc.request_shutdown = lambda port, token=None: False
+        self.oc.request_shutdown = lambda port, token=None, if_idle=False: False
         seen = []
 
         def run(cmd, **_):
@@ -107,7 +107,7 @@ class OlderServerTest(unittest.TestCase):
         (ws / ".serve.json").write_text(json.dumps({"pid": server.pid, "port": 1}))
         old = open_course.ping, open_course.request_shutdown
         open_course.ping = lambda port, token=None: {"course": str(ws.resolve())}  # no "pid": an older server
-        open_course.request_shutdown = lambda port, token=None: False  # and no shutdown route either
+        open_course.request_shutdown = lambda port, token=None, if_idle=False: False  # and no shutdown route either
         try:
             self.assertTrue(open_course.stop(ws))
             self.assertIsNotNone(server.wait(timeout=5))
@@ -167,7 +167,7 @@ class UpdateTest(unittest.TestCase):
     def test_a_server_still_stopping_is_not_reported_as_started(self):
         self.oc.ping = lambda port, token=None: {**self.info, "version": "older"}
         self.oc.teaching = lambda port, token=None: False
-        self.oc.stop = lambda ws: None
+        self.oc.stop = lambda ws, if_idle=False: None
         self.oc.start = self.refuse
         with self.assertRaises(SystemExit) as caught:
             self.main()
@@ -196,9 +196,9 @@ class OpenCourseTest(unittest.TestCase):
         fake = base / "bin" / "claude"
         fake.write_text(FAKE_CLAUDE)
         fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
-        # HOME too, so syncing the course writes its diagram profile here, not into the real home folder.
+        # HOME and USERPROFILE (Windows) too, so syncing writes the diagram profile here, not in the real home folder.
         self.env = dict(os.environ, PATH=f"{fake.parent}{os.pathsep}{os.environ['PATH']}",
-                        FAKE_CLAUDE_LOG=str(base / "claude.log"), HOME=str(base))
+                        FAKE_CLAUDE_LOG=str(base / "claude.log"), HOME=str(base), USERPROFILE=str(base))
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             self.port = s.getsockname()[1]
@@ -277,6 +277,88 @@ class OpenCourseTest(unittest.TestCase):
             out = self.run_cmd("--port", str(self.port))
         self.assertIn("Started", out)
         self.assertNotEqual(json.loads((self.ws / "course.json").read_text())["port"], self.port)
+
+
+class RestartSafetyTest(unittest.TestCase):
+    """A restart for an update waits for any teaching job, and an opened page carries the phone token it needs."""
+
+    def setUp(self):
+        import open_course
+        self.oc = open_course
+        self.saved = {k: getattr(open_course, k) for k in ("ping", "teaching", "stop", "start", "port_free")}
+        self.saved_sync = open_course.sync_course.sync
+        self.synced = []
+        open_course.sync_course.sync = lambda ws: self.synced.append(ws) or ([], [])
+        self.ws = Path(tempfile.mkdtemp())
+        (self.ws / "index.html").write_text("<main></main>")
+        self.old = {"course": str(self.ws.resolve()), "code": None, "web": [], "lan": False, "pid": 1,
+                    "version": "older", "skill": str(HERE.parent)}
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(self.oc, k, v)
+        self.oc.sync_course.sync = self.saved_sync
+        shutil.rmtree(self.ws, ignore_errors=True)
+
+    def main(self, *args):
+        out, argv = StringIO(), sys.argv
+        sys.argv = ["open_course.py", str(self.ws), *args, "--no-open", "--port", "1"]  # page first, as in the usage
+        try:
+            with redirect_stdout(out):
+                self.oc.main()
+        finally:
+            sys.argv = argv
+        return out.getvalue()
+
+    def never(self, *_a, **_k):
+        raise AssertionError("must not be called")
+
+    def test_unknown_teaching_state_keeps_the_server_and_its_files(self):
+        self.oc.ping = lambda port, token=None: self.old
+        self.oc.teaching = lambda port, token=None: None  # the status request failed
+        self.oc.stop = self.oc.start = self.never
+        self.assertIn("may be running a teaching job", self.main())
+        self.assertEqual(self.synced, [], "the old server's check would see new files and its fix would copy old ones back")
+
+    def test_a_job_started_after_the_check_refuses_the_shutdown(self):
+        self.oc.ping = lambda port, token=None: self.old
+        self.oc.teaching = lambda port, token=None: False
+        self.oc.stop = lambda ws, if_idle=False: "busy" if if_idle else self.never()
+        self.oc.start = self.never
+        self.assertIn("may be running a teaching job", self.main())
+        self.assertEqual(self.synced, [])
+
+    def test_the_opened_link_carries_the_phone_token(self):
+        # With --lan the server wants the token from this computer too, and a restart makes a new one.
+        self.oc.ping = lambda port, token=None: None
+        self.oc.port_free = lambda port: True
+        def start(ws, cfg, stale_pid=None):
+            (ws / ".serve.json").write_text(json.dumps({"phone_url": "http://192.0.2.1:1/?k=tok"}))
+            return True
+        self.oc.start = start
+        out = self.main("lessons/x.html#q-one")
+        self.assertIn("Open: http://localhost:1/lessons/x.html?k=tok#q-one", out)
+
+
+class SyncSafetyTest(unittest.TestCase):
+    def test_sync_replaces_a_linked_asset_instead_of_writing_through_it(self):
+        import sync_course
+        base = Path(tempfile.mkdtemp())
+        outside = base / "outside.css"
+        outside.write_text("someone else's file\n")
+        ws = base / "course"
+        shutil.copytree(HERE.parent / "starter" / "assets", ws / "assets")
+        (ws / "assets" / "style.css").unlink()
+        (ws / "assets" / "style.css").symlink_to(outside)
+        old_profile, sync_course.PROFILE = sync_course.PROFILE, base / "profile.md"
+        try:
+            sync_course.sync(ws)
+        finally:
+            sync_course.PROFILE = old_profile
+        self.assertEqual(outside.read_text(), "someone else's file\n")
+        self.assertFalse((ws / "assets" / "style.css").is_symlink())
+        self.assertEqual((ws / "assets" / "style.css").read_bytes(), (HERE.parent / "starter/assets/style.css").read_bytes())
+        shutil.rmtree(base)
 
 
 if __name__ == "__main__":

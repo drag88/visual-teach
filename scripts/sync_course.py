@@ -65,10 +65,13 @@ def sync(ws):
     (ws / "assets").mkdir(exist_ok=True)
     changed = drifted(ws)
     for name in changed:
-        shutil.copy(SKILL / "starter" / "assets" / name, ws / "assets" / name)
+        dest = ws / "assets" / name
+        if dest.is_symlink():
+            dest.unlink()  # replace the link with a copy; never write through it to a file outside the course
+        shutil.copy(SKILL / "starter" / "assets" / name, dest)
     linked = [p.relative_to(ws) for p in pages(ws) if p.resolve().is_relative_to(ws) and link_assets(p, ws)]
     marker = ws / ".diagram-design"
-    if not marker.exists():
+    if not marker.exists() and not marker.is_symlink():
         marker.write_text("profile: learn\n", encoding="utf-8")
     src = SKILL / "starter" / "diagram-profile-learn.md"
     if not PROFILE.exists() or PROFILE.read_bytes() != src.read_bytes():

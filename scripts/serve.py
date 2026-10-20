@@ -121,6 +121,7 @@ class Course:
         self.busy = set()  # threads with an answer still streaming
         self.live = set()  # running claude processes, stopped if the server stops
         self.job = None  # the latest teaching job started from the course page
+        self.closing = False  # set once a shutdown is accepted, so no teaching job starts after it
         self.user_settings = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"
         # Long or structured arguments go in files here, never on the command line, which Windows can mangle.
         self.tmp = Path(tempfile.mkdtemp(prefix="visual-teach-"))
@@ -489,6 +490,8 @@ class Course:
             return 409, "The skill was updated since this server started. Open the course again, then try again."
         refresh = self.settings().get("refresh")
         with self.lock:
+            if self.closing:
+                return 409, "The server is restarting. Try again in a moment."
             last = self.job
             if last and last["state"] == "running":
                 return 409, "A teaching job is already running."
@@ -788,6 +791,13 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/shutdown":
             if not self.local():
                 return self.send_error(403, "Only from this computer")
+            # if_idle is how open_course.py restarts for an update: checked and settled under the lock that starting
+            # a job takes, so a job begun a moment after the opener looked is never ended by it.
+            with course.lock:
+                busy = bool(body.get("if_idle")) and bool(course.job) and course.job["state"] == "running"
+                course.closing = course.closing or not busy
+            if busy:
+                return self.json({"error": "A teaching job is running."}, 409)
             self.json({"ok": True})
             # A clean stop ends the Claude runs and removes the temporary files; a forced one would leave both.
             threading.Thread(target=lambda: (self.server.shutdown(), self.server.server_close()), daemon=True).start()

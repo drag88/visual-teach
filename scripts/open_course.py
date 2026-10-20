@@ -21,6 +21,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -59,8 +60,16 @@ def ping(port, token=None):
 
 
 def teaching(port, token=None):
-    """True while the server runs a teaching job, which stopping it would end."""
-    info = api(port, "/api/teach", token)
+    """True while the server runs a teaching job, which stopping it would end; False when it runs none; None when
+    the server does not say."""
+    url = f"http://localhost:{port}/api/teach" + (f"?k={token}" if token else "")
+    try:
+        with urllib.request.urlopen(url, timeout=2) as r:
+            info = json.loads(r.read())
+    except urllib.error.HTTPError as exc:
+        return False if exc.code == 404 else None  # 404: a server from before teaching from the page existed
+    except (OSError, ValueError):
+        return None
     job = info.get("job") if isinstance(info, dict) else None
     return isinstance(job, dict) and job.get("state") == "running"
 
@@ -93,17 +102,23 @@ def alive(pid):
     return True
 
 
-def request_shutdown(port, token=None):
+def request_shutdown(port, token=None, if_idle=False):
+    """True once the server agrees to stop, "busy" when if_idle and a teaching job is running, else False."""
     url = f"http://localhost:{port}/api/shutdown" + (f"?k={token}" if token else "")
-    req = urllib.request.Request(url, data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+    body = json.dumps({"if_idle": if_idle}).encode()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=2) as r:
             return r.status == 200
+    except urllib.error.HTTPError as exc:
+        return "busy" if exc.code == 409 else False
     except OSError:
         return False
 
 
-def stop(ws):
+def stop(ws, if_idle=False):
+    """True once stopped, False when nothing answers as this course's server, None while it is still stopping,
+    and "busy" when if_idle and the server is running a teaching job (then nothing is ended)."""
     run = read_json(ws / ".serve.json")
     pid, port = run.get("pid"), run.get("port")
     token = token_of(run)
@@ -114,7 +129,10 @@ def stop(ws):
         # number may now belong to something else, so nothing is ended.
         (ws / ".serve.json").unlink(missing_ok=True)
         return False
-    if not request_shutdown(port, token):  # a clean stop ends its Claude runs and tidies up
+    answer = request_shutdown(port, token, if_idle)  # a clean stop ends its Claude runs and tidies up
+    if answer == "busy":
+        return "busy"
+    if not answer:
         if WINDOWS:  # no SIGTERM handling there: taskkill /T ends the server and what it started
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, text=True)
         else:
@@ -163,6 +181,17 @@ def wanted(info, cfg):
             and info.get("version") == sync_course.code_version() and info.get("skill") == str(HERE.parent))
 
 
+def refresh(ws):
+    """Bring the course's shared files up to date with this copy of the skill."""
+    try:
+        changed, _ = sync_course.sync(ws)
+    except (OSError, ValueError) as exc:
+        print(f"Could not update the course's shared files: {exc}")
+        return
+    if changed:
+        print("Updated the course's shared files:", ", ".join(changed))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Start or reuse a course's reading server and open a page.")
     ap.add_argument("workspace")
@@ -183,14 +212,6 @@ def main():
                None: "The server has not stopped yet. Run --stop again in a moment."}[stop(ws)])
         return
 
-    try:
-        changed, _ = sync_course.sync(ws)
-    except (OSError, ValueError) as exc:
-        print(f"Could not update the course's shared files: {exc}")
-    else:
-        if changed:
-            print("Updated the course's shared files:", ", ".join(changed))
-
     cfg = read_json(ws / "course.json")
     if args.code:
         cfg["code"] = str(Path(args.code).expanduser().resolve())
@@ -204,26 +225,36 @@ def main():
     token = token_of(run)
     info = ping(cfg["port"], token)
     ours = bool(info) and info.get("course") == str(ws)
-    if ours and wanted(info, cfg):
+    restart = waiting = False
+    if ours and not wanted(info, cfg):
+        # Same course, new settings or code: restart it, but never during a teaching job, which a restart would end.
+        # A server that cannot say keeps running, and so do the course's files, which its own check compares against.
+        # The server itself refuses if a job started after this check.
+        stopped = stop(ws, if_idle=True) if teaching(cfg["port"], token) is False else "busy"
+        if stopped is None:
+            sys.exit("The course server has not stopped yet. Run this again in a moment.")
+        waiting, restart = stopped == "busy", stopped != "busy"
+    if waiting:
+        print("Reusing the course server for now: it may be running a teaching job, which a restart would stop.\n"
+              "Open the course again after it finishes to use the new settings or the updated skill.")
+    elif ours and not restart:
+        refresh(ws)
         print("Reusing the course server that is already running.")
-    elif ours and teaching(cfg["port"], token):
-        print("Reusing the course server for now: it is running a teaching job, which a restart would stop.\n"
-              "Open the course again after the job finishes to use the new settings or the updated skill.")
     else:
-        stale = None
-        if ours:  # same course, new settings or code: restart it
-            stale = info.get("pid")
-            if stop(ws) is None:
-                sys.exit("The course server has not stopped yet. Run this again in a moment.")
-        elif not port_free(cfg["port"]):
+        refresh(ws)
+        if not restart and not port_free(cfg["port"]):
             cfg["port"] = next(p for p in range(cfg["port"] + 1, cfg["port"] + 100) if port_free(p))
-        if not start(ws, cfg, stale):
+        if not start(ws, cfg, info.get("pid") if restart else None):
             tail = (ws / ".serve.log").read_text(encoding="utf-8", errors="replace")[-1500:] if (ws / ".serve.log").exists() else ""
             sys.exit(f"The course server did not start. Last lines of {ws / '.serve.log'}:\n{tail}")
         print("Started the course server.")
     (ws / "course.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 
-    url = f"http://localhost:{cfg['port']}/{args.page.lstrip('/')}"
+    # With --lan the server wants its token from this computer too, and each start makes a new one.
+    page, _, fragment = args.page.lstrip("/").partition("#")
+    token = token_of(read_json(ws / ".serve.json"))
+    url = (f"http://localhost:{cfg['port']}/{page}" + (f"?k={token}" if token else "")
+           + (f"#{fragment}" if fragment else ""))
     print(f"Open: {url}")
     phone = read_json(ws / ".serve.json").get("phone_url")
     if phone:

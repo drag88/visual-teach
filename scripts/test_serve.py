@@ -613,6 +613,24 @@ class ServeTest(unittest.TestCase):
         self.assertIn("Open the course again", json.loads(body)["error"])
         self.assertFalse(self.log.exists(), "no Claude run started")
 
+    def test_shutdown_if_idle_waits_for_a_teaching_job(self):
+        # The opener asks this way before a restart, so a job started a moment after its check is not ended.
+        os.environ["FAKE_CLAUDE_SLOW"] = "1"
+        self.server.course.check = lambda *_: (True, "ok")
+        self.assertEqual(self.teach("next")[0].status, 200)
+        resp, body = self.request("POST", "/api/shutdown", {"if_idle": True})
+        self.assertEqual(resp.status, 409)
+        self.assertEqual(self.teach_status()["job"]["state"], "running")
+        self.request("POST", "/api/teach/stop", {})
+        self.wait_job()
+
+    def test_no_teaching_job_starts_once_a_shutdown_is_under_way(self):
+        self.server.course.closing = True
+        resp, body = self.teach("next")
+        self.assertEqual(resp.status, 409)
+        self.assertFalse(self.log.exists(), "no Claude run started")
+        self.server.course.closing = False
+
     def test_teach_fix_sends_the_check_problems(self):
         self.server.course.check = lambda *_: (False, "0001-x.html: sentence over 25 words")
         self.teach("next")
