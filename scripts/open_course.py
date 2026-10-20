@@ -1,6 +1,6 @@
 """Start or reuse a course's reading server, then open a page of the course in the browser.
 
-Usage: python3 open_course.py <workspace> [page] [--code DIR] [--web DOMAIN ...] [--lan] [--port N]
+Usage: python3 open_course.py <workspace> [page] [--code DIR] [--web DOMAIN ...] [--lan | --no-lan] [--port N]
                                                  [--no-open] [--stop]
 
 Settings given once (--code, --web, --lan, --port) are saved in <workspace>/course.json, so later
@@ -75,6 +75,12 @@ def teaching(port, token=None):
 
 
 def port_free(port):
+    with socket.socket() as probe:
+        # Something answering counts as busy: a server listening on every interface (another course with --lan)
+        # does not stop the bind below on macOS, since that one asks only for 127.0.0.1.
+        probe.settimeout(0.5)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            return False
     with socket.socket() as s:
         # Same reuse rule as the server, so connections still closing from the last run do not move the course
         # to a new port (and lose what the browser saved for the old address, such as the theme).
@@ -198,7 +204,8 @@ def main():
     ap.add_argument("page", nargs="?", default="", help="page to open, e.g. lessons/0002-x.html")
     ap.add_argument("--code", help="folder answers may read, read-only")
     ap.add_argument("--web", action="append", help="domain Deep answers may fetch (repeatable)")
-    ap.add_argument("--lan", action="store_true", default=None, help="also listen on the network for a phone")
+    ap.add_argument("--lan", action=argparse.BooleanOptionalAction, default=None,
+                    help="also listen on the network for a phone (--no-lan turns it off)")
     ap.add_argument("--port", type=int)
     ap.add_argument("--no-open", action="store_true", help="print the link without opening a browser")
     ap.add_argument("--stop", action="store_true", help="stop this course's server")
@@ -218,7 +225,7 @@ def main():
     if args.web:
         cfg["web"] = args.web
     if args.lan is not None:
-        cfg["lan"] = True
+        cfg["lan"] = args.lan
     cfg["port"] = args.port or cfg.get("port") or DEFAULT_PORT
 
     run = read_json(ws / ".serve.json")

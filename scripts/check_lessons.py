@@ -13,7 +13,7 @@ import re
 import sys
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeout, sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sync_course import drifted  # noqa: E402
@@ -45,25 +45,38 @@ def long_sentences(pg):
     return [s.strip() for s in sentences if len(s.split()) > MAX_SENTENCE_WORDS]
 
 
-def answer_quizzes(pg):
-    for q in pg.locator(".quiz.mcq").all():
+def answer_quiz(q):
+    kind = (q.get_attribute("class") or "").split()
+    if "mcq" in kind:
         q.locator("button[data-right]").click()
-    for q in pg.locator(".quiz.order").all():
-        for row in q.locator(".order-row").all():
-            row.locator("select").select_option(row.get_attribute("data-pos"))
+    elif "order" in kind or "match" in kind:
+        rows, key = (".order-row", "data-pos") if "order" in kind else (".match-row", "data-a")
+        for row in q.locator(rows).all():
+            row.locator("select").select_option(row.get_attribute(key))
         q.locator("button.act").click()
-    for q in pg.locator(".quiz.match").all():
-        for row in q.locator(".match-row").all():
-            row.locator("select").select_option(row.get_attribute("data-a"))
-        q.locator("button.act").click()
-    for q in pg.locator(".quiz.spot").all():
+    elif "spot" in kind:
         q.locator(f'g[data-spot="{q.get_attribute("data-answer")}"]').first.click()
-    for q in pg.locator(SELF_MARKED).all():
+    elif "recall" in kind or "predict" in kind:
         q.locator("textarea").fill("answer written from memory")
         q.locator("button.act").click()
         # Self-marks feed review, not the score, so marking them right must leave the score line alone.
         q.locator("button.mark", has_text="I got it").click()
-    return pg.locator(".quiz").count()
+
+
+def answer_quizzes(pg, lesson):
+    """Answer every quiz correctly. Returns the quiz count and one line for each quiz that could not be answered:
+    a broken quiz is a problem to fix in the lesson, not a crash of the whole check."""
+    quizzes, problems = pg.locator(".quiz").all(), []
+    for q in quizzes:
+        try:
+            answer_quiz(q)
+            continue
+        except PlaywrightTimeout:
+            reason = "its right answer, or the part to tap, is not on the page"
+        except PlaywrightError as exc:
+            reason = (str(exc).splitlines() or ["no reason given"])[0]
+        problems.append(f"{lesson.name}: quiz {q.get_attribute('id') or '(no id)'} could not be answered: {reason}")
+    return len(quizzes), problems
 
 
 def smallest_diagram_label(pg):
@@ -106,6 +119,7 @@ def main():
         for scheme in ("light", "dark"):
             ctx = browser.new_context(viewport=PHONE, color_scheme=scheme, device_scale_factor=2)
             pg = ctx.new_page()
+            pg.set_default_timeout(5000)  # a quiz that cannot be answered fails in seconds, not half a minute
             errors = []
             pg.on("pageerror", lambda e: errors.append(str(e)))
             for page in pages:
@@ -115,7 +129,8 @@ def main():
             for lesson in lessons:
                 pg.goto(lesson.as_uri())
                 if scheme == "light":
-                    n = answer_quizzes(pg)
+                    n, unanswered = answer_quizzes(pg, lesson)
+                    problems += unanswered
                     score = pg.locator("#score").inner_text() if pg.locator("#score").count() else ""
                     graded = n - pg.locator(SELF_MARKED).count()
                     # Review history and links key on the quiz id, so each needs its own.
@@ -125,7 +140,7 @@ def main():
                     dupes = sorted({i for i in ids if i and ids.count(i) > 1})
                     if dupes:
                         problems.append(f"{lesson.name}: quiz id used twice: {', '.join(dupes)}")
-                    if graded and score != f"{graded} of {graded} right first time":
+                    if graded and not unanswered and score != f"{graded} of {graded} right first time":
                         problems.append(f"{lesson.name}: answering every quiz correctly scored '{score}'")
                     for s in long_sentences(pg):
                         problems.append(f"{lesson.name}: sentence over {MAX_SENTENCE_WORDS} words: {s[:90]}...")

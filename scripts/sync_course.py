@@ -40,18 +40,23 @@ def drifted(ws):
             or (ws / "assets" / n).read_bytes() != (src / n).read_bytes()]
 
 
+def loads(html, prefix, name):
+    """True when the page already loads assets/<name>, however its tag is written (a "/>", a defer, single quotes)."""
+    return re.search(rf"""(?:href|src)\s*=\s*["']{re.escape(prefix)}assets/{re.escape(name)}["']""", html) is not None
+
+
 def link_assets(page, ws):
     prefix = "" if page.parent == ws else "../"
     html = page.read_text(encoding="utf-8")
     original = html
     sheets = ["style.css", "ask.css"] + (["course.css"] if (ws / "assets" / "course.css").exists() else [])
-    tags = [f'<link rel="stylesheet" href="{prefix}assets/{s}">' for s in sheets]
-    tags.append(f'<script src="{prefix}assets/theme.js"></script>')  # in <head>, so the theme is set before paint
-    missing = [t for t in tags if t not in html]
+    tags = [(s, f'<link rel="stylesheet" href="{prefix}assets/{s}">') for s in sheets]
+    tags.append(("theme.js", f'<script src="{prefix}assets/theme.js"></script>'))  # in <head>, so the theme is set before paint
+    missing = [tag for name, tag in tags if not loads(html, prefix, name)]
     if missing:
         html = html.replace("</head>", "\n".join(missing) + "\n</head>", 1)
-    scripts = [f'<script src="{prefix}assets/{s}"></script>' for s in ("quiz.js", "ask.js")]
-    missing = [t for t in scripts if t not in html]
+    scripts = [(s, f'<script src="{prefix}assets/{s}"></script>') for s in ("quiz.js", "ask.js")]
+    missing = [tag for name, tag in scripts if not loads(html, prefix, name)]
     if missing:
         html = re.sub(r"</body>", "\n".join(missing) + "\n</body>", html, count=1)
     if html != original:

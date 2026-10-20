@@ -356,6 +356,21 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(self.finished_runs(), [], "claude kept running after the reader left")
         self.assertFalse(any(r["role"] == "assistant" for r in self.records()))
 
+    def test_failure_words(self):
+        ok = {"returncode": 0, "stderr": "", "error": None}
+        self.assertIsNone(serve.failure(ok))
+        self.assertEqual(serve.failure({**ok, "returncode": -15}), "It was stopped before it finished.")
+        self.assertEqual(serve.failure({**ok, "returncode": 1, "stderr": "boom"}), "boom")
+        self.assertEqual(serve.failure({**ok, "returncode": 2}), "claude exited 2")
+        self.assertEqual(serve.failure({**ok, "error": "Claude usage limit reached"}), "Claude usage limit reached")
+
+    def test_teaching_prompt_says_what_it_cannot_reach(self):
+        # Without the web, a lesson on a topic outside the course folder would be written from memory.
+        prompt = self.server.course.teach_prompt("next", None)
+        self.assertIn("cannot search the web", prompt)
+        self.server.course.web = ["docs.example.org"]
+        self.assertIn("docs.example.org", self.server.course.teach_prompt("next", None))
+
     def test_failure_sends_error_event(self):
         os.environ["FAKE_CLAUDE_FAIL"] = "1"
         _, events = self.ask()

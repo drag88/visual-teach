@@ -97,6 +97,17 @@ def read_text(path):
         return ""
 
 
+def failure(result):
+    """What went wrong with a finished Claude run, in words for the page, or None when it went fine."""
+    if result.get("error"):
+        return result["error"]
+    if result["returncode"] == 0:
+        return None
+    if result["returncode"] < 0:  # ended by a signal: a stop from the page, or the server stopping
+        return "It was stopped before it finished."
+    return result["stderr"][-300:] or f"claude exited {result['returncode']}"
+
+
 def read_dict(path):
     """A file's JSON object, or {} when the file is missing, broken or holds something else."""
     try:
@@ -397,9 +408,9 @@ class Course:
             result = self.run(self.command(tier, session, False), prompt, send, gone)
             if result is None:
                 return
-        if result["returncode"] != 0 or result.get("error"):
-            send("error", {"message": result.get("error") or result["stderr"][-300:]
-                           or f"claude exited {result['returncode']}"})
+        message = failure(result)
+        if message:
+            send("error", {"message": message})
             return
         self.append({"t": now(), "thread": thread, "role": "assistant", "session": session,
                      "model": result["model"], "cost_usd": result["cost_usd"],
@@ -439,6 +450,9 @@ class Course:
             "- You have no shell: run no script and take no screenshots. Read and edit files only.",
             "- Edit only files inside the course folder. To mark a question thread handled, add its meta line "
             "after the last line of questions.jsonl.",
+            "- You cannot search the web" + (f"; you can fetch pages only from {', '.join(self.web)}" if self.web else "")
+            + ". Where a lesson needs a fact you cannot check in the course, the skill or the source folder, leave it "
+            "out or mark it unchecked, and say so in your closing lines rather than writing it from memory.",
             f"Task: {TEACH_TASKS[action]}",
         ]
         if problems:
@@ -528,8 +542,8 @@ class Course:
                 job["state"] = "stopped"
                 return
             job["cost_usd"] = result["cost_usd"]
-            if result["returncode"] != 0 or result.get("error"):
-                job["error"] = result.get("error") or result["stderr"][-300:] or f"claude exited {result['returncode']}"
+            job["error"] = failure(result)
+            if job["error"]:
                 job["state"] = "failed"
                 return
             job["lines"].append("Checking the course")
@@ -918,7 +932,7 @@ def main():
     run_file.write_text(json.dumps(run), encoding="utf-8")
     run_file.chmod(0o600)
     print(f"Course: {ws}")
-    print(f"On this Mac: {run['url']}")
+    print(f"On this computer: {run['url']}")
     if args.lan:
         print(f"On your phone (same network): {run['phone_url']}")
     print("Stop with Ctrl-C.")

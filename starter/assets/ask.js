@@ -339,7 +339,6 @@
 
   function makeCard({ kind, selection, block, thread = null }) {
     const card = node("aside", "ask-card");
-    card.thread = thread;
     const head = node("div", "ask-head");
     const label = node("span", "ask-kind");
     label.textContent = LABEL[kind];
@@ -376,10 +375,17 @@
       send(card, { thread: card.thread, kind: "ask", mode, lesson, question: q }, q);
     });
     card.append(head, log, foot, follow);
-    Object.assign(card, { log, meta, block });
+    Object.assign(card, { log, meta, block, followUp: [input, go] });
+    setThread(card, thread);
     cards.push(card);
     updateShow();
     return card;
+  }
+
+  // A follow-up continues the thread the first answer opened, so the box waits until there is one.
+  function setThread(card, thread) {
+    card.thread = thread;
+    card.followUp.forEach((el) => { el.disabled = !thread; });
   }
 
   function post(path, body, signal) {
@@ -449,7 +455,7 @@
     }
     let d;
     try { d = JSON.parse(data); } catch { return; }
-    if (event === "thread") card.thread = d.thread;
+    if (event === "thread") setThread(card, d.thread);
     else if (event === "status") ex.status.textContent = d.text + "…";
     else if (event === "delta") {
       ex.text += d.text;
@@ -482,7 +488,7 @@
     if (!body.thread && card.thread) {
       // Retrying the first question: drop the unanswered thread and start it again.
       post("/api/delete", { thread: card.thread }).catch(() => {});
-      card.thread = null;
+      setThread(card, null);
     }
     send(card, body, card.lastQuestion);
   }
@@ -515,20 +521,27 @@
     for (const m of t.messages) {
       if (m.role === "user") {
         const asked = ["ask", "whole", "connect", "check"].includes(t.kind) || ex;
-        ex = exchange(card, asked ? m.text : null);
+        // The log keeps the task Claude was given; the learner asked to connect to a topic.
+        const text = !ex && t.kind === "connect" && t.topic ? "Connect to " + t.topic : m.text;
+        ex = exchange(card, asked ? text : null);
         ex.status.remove();
+        ex.answered = false;
       } else if (m.role === "assistant" && ex) {
         ex.answer.innerHTML = md(m.text || "");
+        ex.answered = true;
         card.meta.textContent = metaLine(m);
       }
     }
+    // The reader left, the server stopped or the run failed before an answer was saved.
+    const unanswered = ex && !ex.answered;
+    if (unanswered) ex.answer.append(Object.assign(node("p", "ask-status"), { textContent: "No answer was saved for this. Ask it again below." }));
     if (t.anchor && !block) {
       const moved = node("p", "ask-status");
       moved.textContent = "The passage this was about has moved or changed.";
       card.log.prepend(moved);
     }
     if (block && t.anchor && t.anchor.quote) card.range = findRange(block, t.anchor.quote.exact);
-    setFolded(card, true);
+    setFolded(card, !unanswered);
     place(card, block);
   }
 
@@ -657,7 +670,7 @@
   function showReview() {
     const lists = main.querySelectorAll("ol.syllabus");
     if (!lists.length) return;
-    getJSON("/api/review").then(({ due }) => {
+    getJSON("/api/review").then(({ due, waiting }) => {
       const list = node("ul", "ask-review");
       for (const item of due || []) {
         const url = new URL(item.href, location.href);
@@ -669,10 +682,16 @@
         li.append(a);
         list.append(li);
       }
-      if (!list.children.length) return;
+      if (!list.children.length && !waiting) return;
       const head = node("h2");
       head.textContent = "Review";
-      lists[lists.length - 1].after(head, list);
+      const parts = [head, ...(list.children.length ? [list] : [])];
+      if (waiting) {
+        const later = node("p", "ask-review-later");
+        later.textContent = `${waiting} missed question${waiting === 1 ? "" : "s"} will come back here for review.`;
+        parts.push(later);
+      }
+      lists[lists.length - 1].after(...parts);
     }).catch(() => {});
   }
 
@@ -702,7 +721,7 @@
       box.append(head, note, actions, node("div", "ask-teach-status"));
       // Right under the lesson list (and the review list when there is one), where the next lesson is looked for.
       const lists = main.querySelectorAll("ol.syllabus");
-      const after = main.querySelector(".ask-review") || lists[lists.length - 1];
+      const after = main.querySelector(".ask-review-later") || main.querySelector(".ask-review") || lists[lists.length - 1];
       if (after) after.after(box);
       else main.append(box);
       renderTeach(box, info.job);

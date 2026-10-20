@@ -48,7 +48,7 @@
    $visual-teach how DNS works
    ```
 
-3. Read. The first lesson opens in your browser. Highlight anything to ask.
+3. Answer a few questions about why you want to learn it. Claude then writes the first lesson, which takes about 5 to 15 minutes, and opens it in your browser. Highlight anything to ask.
 
 Requirements: Node.js for the npx install; Python 3.9 or later; Claude Code's `claude` command installed and signed in for live answers; Python Playwright only for the checks (it uses its own Chromium, or your installed Chrome). On Windows, type `python` or `py` wherever this page says `python3`.
 
@@ -118,7 +118,7 @@ That is where `npx skills add -g` puts the skill. After a manual install, use:
 python3 ~/code/visual-teach/scripts/open_course.py ~/learn/<course>
 ```
 
-Opening a course brings its shared files up to date, and after an update restarts its reading server; if a teaching session is running, the restart waits for the next open. Add `--lan` for a phone on the same Wi-Fi; each restart gives the phone a new link. The `--code` and `--lan` settings are saved for that course. Add `--stop` to stop its server.
+Opening a course brings its shared files up to date, and after an update restarts its reading server; if a teaching session is running, the restart waits for the next open. Add `--lan` for a phone on the same Wi-Fi, and `--no-lan` to turn it off; each restart gives the phone a new link. The `--code` and `--lan` settings are saved for that course. Add `--stop` to stop its server.
 
 To continue a course in Claude Code:
 
@@ -149,6 +149,7 @@ It runs on your own Claude plan. Reading and local quizzes need no live answers.
 - The server listens on localhost by default. With `--lan`, it listens on your local network behind a token in the phone link. Keep that link private.
 - Answers and teaching sessions run with `claude --restricted`: your own Claude settings, hooks and plugins stay out of them. Answers are read-only. Teaching sessions can edit course content, including lesson files, only inside the course folder.
 - `scripts/teach_guard.py` enforces that boundary and protects settings and shared assets. Served course pages run only the skill's own scripts.
+- Outside the course folder, the skill writes one file: its diagram style, as diagram-design's `learn` profile in `~/.diagram-design/profiles/learn.md`.
 
 <details>
 <summary>Install by hand</summary>

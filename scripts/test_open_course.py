@@ -117,13 +117,14 @@ class OlderServerTest(unittest.TestCase):
                 server.kill()
 
 
-class UpdateTest(unittest.TestCase):
-    """An update must reach a running server, but never by stopping a teaching job or claiming a start that failed."""
+class StubbedOpen(unittest.TestCase):
+    """open_course.main() run in this process, with the server calls replaced."""
 
     def setUp(self):
         import open_course
         self.oc = open_course
-        self.saved = {k: getattr(open_course, k) for k in ("ping", "teaching", "stop", "start", "subprocess", "time")}
+        self.saved = {k: getattr(open_course, k) for k in ("ping", "teaching", "stop", "start", "subprocess", "time",
+                                                            "port_free")}
         self.saved_sync = open_course.sync_course.sync
         open_course.sync_course.sync = lambda ws: ([], [])
         self.ws = Path(tempfile.mkdtemp())
@@ -150,6 +151,10 @@ class UpdateTest(unittest.TestCase):
 
     def refuse(self, *_args, **_kw):
         raise AssertionError("must not be called")
+
+
+class UpdateTest(StubbedOpen):
+    """An update must reach a running server, but never by stopping a teaching job or claiming a start that failed."""
 
     def test_wanted_needs_the_same_code_and_skill_folder(self):
         cfg = {"port": 1}
@@ -182,6 +187,32 @@ class UpdateTest(unittest.TestCase):
         self.assertFalse(self.oc.start(self.ws.resolve(), {"port": 1}, stale_pid=99))
         self.oc.ping = lambda port, token=None: {**self.info, "pid": 100}
         self.assertTrue(self.oc.start(self.ws.resolve(), {"port": 1}, stale_pid=99))
+
+
+class SyncTest(unittest.TestCase):
+    def test_a_tag_written_another_way_is_not_added_twice(self):
+        import sync_course
+        ws = Path(tempfile.mkdtemp())
+        (ws / "lessons").mkdir()
+        page = ws / "lessons" / "one.html"
+        page.write_text('<html><head><link rel="stylesheet" href="../assets/style.css" />\n'
+                        '<script src="../assets/theme.js" defer></script></head><body><main></main></body></html>')
+        self.assertTrue(sync_course.link_assets(page, ws))
+        html = page.read_text()
+        for name in ("style.css", "theme.js", "ask.css", "quiz.js", "ask.js"):
+            self.assertEqual(html.count(f"assets/{name}"), 1, name)
+        self.assertFalse(sync_course.link_assets(page, ws), "a second sync changes nothing")
+        shutil.rmtree(ws)
+
+
+class LanSettingTest(StubbedOpen):
+    def test_no_lan_turns_the_phone_link_off(self):
+        self.oc.ping = lambda port, token=None: None
+        self.oc.start = lambda ws, cfg, stale_pid=None: True
+        self.oc.port_free = lambda port: True
+        (self.ws / "course.json").write_text(json.dumps({"lan": True, "port": 1}))
+        self.main("--no-lan")
+        self.assertFalse(json.loads((self.ws / "course.json").read_text())["lan"])
 
 
 class OpenCourseTest(unittest.TestCase):
