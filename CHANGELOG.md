@@ -2,6 +2,14 @@
 
 Notable changes to visual-teach. Versions follow [semantic versioning](https://semver.org): new features raise the middle number, fixes the last one. `.claude-plugin/plugin.json` carries the same version, and Claude Code installs with auto-update get a release when that number changes.
 
+## [1.3.0] - 2026-10-20
+
+### Changed
+
+- Teach moves from a section on the course home page to the top right of every page, beside the light/dark switch. While a teaching job runs, it shows how long the job has been going, on every page.
+- The teaching panel shows the current step on one line, with earlier steps folded away, then the summary and whether the course check passed. A refresh, or a job that failed, shows its last lines of output.
+- Step lines are short: course and source files by their path in the course or source folder, the skill's files by name, and long search patterns cut.
+
 ## [1.2.1] - 2026-10-20
 
 ### Fixed
@@ -63,6 +71,7 @@ First public release.
 - Light and dark themes, a phone layout, and a phone link with `--lan`.
 - Windows process and path handling.
 
+[1.3.0]: https://github.com/drag88/visual-teach/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/drag88/visual-teach/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/drag88/visual-teach/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/drag88/visual-teach/compare/v1.0.0...v1.1.0
