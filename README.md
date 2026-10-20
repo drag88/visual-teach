@@ -20,11 +20,21 @@
 
 ## Quick start
 
-1. Install for both Claude Code and Codex:
+1. Install. In Claude Code, as a plugin that keeps itself up to date:
+
+   ```text
+   /plugin install visual-teach --marketplace drag88/visual-teach
+   ```
+
+   On Claude Code before 2.1.275, run `/plugin marketplace add drag88/visual-teach`, then `/plugin install visual-teach@visual-teach`. Then turn on updates once: open `/plugin`, go to Marketplaces, choose visual-teach and Enable auto-update. Claude Code keeps plugins from other marketplaces at the installed version until you do.
+
+   For Codex, or Codex and Claude Code together:
 
    ```sh
    npx skills add drag88/visual-teach -g -a claude-code -a codex
    ```
+
+   Update that copy with `npx skills update`. Keep one copy per computer: two copies both load, and each resets your courses to its own version.
 
 2. Ask for a course in Claude Code:
 
@@ -32,7 +42,7 @@
    /visual-teach how DNS works
    ```
 
-   Or in Codex:
+   As a plugin it is also `/visual-teach:visual-teach`. Or in Codex:
 
    ```text
    $visual-teach how DNS works
@@ -40,7 +50,7 @@
 
 3. Read. The first lesson opens in your browser. Highlight anything to ask.
 
-Requirements: Node.js for the one-line install; Python 3.9 or later; Claude Code's `claude` command installed and signed in for live answers; Python Playwright only for the checks (it uses its own Chromium, or your installed Chrome). On Windows, type `python` or `py` wherever this page says `python3`.
+Requirements: Node.js for the npx install; Python 3.9 or later; Claude Code's `claude` command installed and signed in for live answers; Python Playwright only for the checks (it uses its own Chromium, or your installed Chrome). On Windows, type `python` or `py` wherever this page says `python3`.
 
 ## What you get
 
@@ -90,7 +100,13 @@ The local server connects your browser to the `claude` command. Courses live in 
 
 Add `--code <folder>` for a codebase or folder of notes. Citations then open the real files beside the lesson, with the cited lines marked.
 
-To open an existing course, run the skill's `open_course.py` from your normal shell:
+To open an existing course to read, with no teaching session:
+
+```text
+/visual-teach open ~/learn/<course>
+```
+
+In Codex, `$visual-teach open ~/learn/<course>`. With an npx install you can also run the opener from your normal shell:
 
 ```sh
 python3 ~/.agents/skills/visual-teach/scripts/open_course.py ~/learn/<course>
@@ -102,7 +118,7 @@ That is where `npx skills add -g` puts the skill. After a manual install, use:
 python3 ~/code/visual-teach/scripts/open_course.py ~/learn/<course>
 ```
 
-Add `--lan` for a phone on the same Wi-Fi. The `--code` and `--lan` settings are saved for that course. Add `--stop` to stop its server.
+Opening a course brings its shared files up to date, and after an update restarts its reading server; if a teaching session is running, the restart waits for the next open. Add `--lan` for a phone on the same Wi-Fi; each restart gives the phone a new link. The `--code` and `--lan` settings are saved for that course. Add `--stop` to stop its server.
 
 To continue a course in Claude Code:
 
@@ -154,6 +170,8 @@ ln -s ~/code/visual-teach ~/.agents/skills/visual-teach
 | Path | What it is |
 |---|---|
 | `SKILL.md` | The instructions Claude Code and Codex follow. |
+| `.claude-plugin/` | The Claude Code plugin and the marketplace that serves it. |
+| `CHANGELOG.md` | What changed in each release. |
 | `agents/openai.yaml` | Codex settings for calling the skill by name. |
 | `starter/` | Page templates, shared styles and scripts, the answer prompt and the diagram profile. |
 | `scripts/` | The reading server, course opener, asset sync, course checker, teaching edit guard and tests. |
@@ -173,9 +191,10 @@ python3 scripts/test_serve.py
 python3 scripts/test_open_course.py
 python3 scripts/test_reader.py
 python3 scripts/test_quiz.py
+python3 scripts/test_release.py
 ```
 
-After changing `starter/`, run `python3 scripts/sync_course.py ~/learn/<course>` for each course.
+After changing `starter/`, open each course again or run `python3 scripts/sync_course.py ~/learn/<course>`. Releases follow the steps at the end of `SKILL.md`: a version in `.claude-plugin/plugin.json`, a `CHANGELOG.md` entry, a `v<version>` tag and a GitHub release.
 
 </details>
 

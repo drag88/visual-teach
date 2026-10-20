@@ -7,6 +7,9 @@ Settings given once (--code, --web, --lan, --port) are saved in <workspace>/cour
 sessions only need `open_course.py <workspace>`. The server runs on its own, so it keeps going after
 the session that started it ends; --stop ends it. Run this from the shell you use Claude Code in, so
 answers use your Claude login and network settings.
+
+Each open also brings the course's shared files up to date, and restarts a server that runs older code
+or another copy of the skill, unless it is in the middle of a teaching job.
 """
 
 import argparse
@@ -21,6 +24,8 @@ import time
 import urllib.request
 import webbrowser
 from pathlib import Path
+
+import sync_course  # the scripts folder is on the path when this runs
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_PORT = 8765
@@ -40,13 +45,24 @@ def token_of(run):
     return run.get("phone_url", "").partition("?k=")[2] or None
 
 
-def ping(port, token=None):
-    url = f"http://localhost:{port}/api/ping" + (f"?k={token}" if token else "")
+def api(port, path, token=None):
+    url = f"http://localhost:{port}{path}" + (f"?k={token}" if token else "")
     try:
         with urllib.request.urlopen(url, timeout=1) as r:
             return json.loads(r.read())
     except (OSError, ValueError):  # URLError is an OSError
         return None
+
+
+def ping(port, token=None):
+    return api(port, "/api/ping", token)
+
+
+def teaching(port, token=None):
+    """True while the server runs a teaching job, which stopping it would end."""
+    info = api(port, "/api/teach", token)
+    job = info.get("job") if isinstance(info, dict) else None
+    return isinstance(job, dict) and job.get("state") == "running"
 
 
 def port_free(port):
@@ -114,7 +130,7 @@ def stop(ws):
     return None  # still running: keep the record so a later --stop can find it
 
 
-def start(ws, cfg):
+def start(ws, cfg, stale_pid=None):
     # -X utf8: the server prints the course path, which a Windows console encoding may not hold.
     cmd = [sys.executable, "-X", "utf8", str(HERE / "serve.py"), str(ws), "--port", str(cfg["port"])]
     if cfg.get("code"):
@@ -131,16 +147,20 @@ def start(ws, cfg):
     for _ in range(150):
         token = token_of(read_json(ws / ".serve.json"))
         info = ping(cfg["port"], token)
-        if info and info.get("course") == str(ws):
+        # Not the old server answering while it shuts down. (Not the new process's pid either: on Windows a
+        # venv's python.exe starts the real interpreter as a child, so the server's pid is not Popen's.)
+        if info and info.get("course") == str(ws) and info.get("pid") not in (None, stale_pid):
             return True
         time.sleep(0.1)
     return False
 
 
 def wanted(info, cfg):
-    """True when the running server already has the settings this course asks for."""
+    """True when the running server has the settings this course asks for and runs this copy of the skill's code.
+    A plugin update installs into a new folder and later deletes the old one, so the folder must match too."""
     return (info.get("code") == cfg.get("code") and info.get("web") == cfg.get("web", [])
-            and info.get("lan") == bool(cfg.get("lan")))
+            and info.get("lan") == bool(cfg.get("lan"))
+            and info.get("version") == sync_course.code_version() and info.get("skill") == str(HERE.parent))
 
 
 def main():
@@ -163,6 +183,14 @@ def main():
                None: "The server has not stopped yet. Run --stop again in a moment."}[stop(ws)])
         return
 
+    try:
+        changed, _ = sync_course.sync(ws)
+    except (OSError, ValueError) as exc:
+        print(f"Could not update the course's shared files: {exc}")
+    else:
+        if changed:
+            print("Updated the course's shared files:", ", ".join(changed))
+
     cfg = read_json(ws / "course.json")
     if args.code:
         cfg["code"] = str(Path(args.code).expanduser().resolve())
@@ -175,14 +203,21 @@ def main():
     run = read_json(ws / ".serve.json")
     token = token_of(run)
     info = ping(cfg["port"], token)
-    if info and info.get("course") == str(ws) and wanted(info, cfg):
+    ours = bool(info) and info.get("course") == str(ws)
+    if ours and wanted(info, cfg):
         print("Reusing the course server that is already running.")
+    elif ours and teaching(cfg["port"], token):
+        print("Reusing the course server for now: it is running a teaching job, which a restart would stop.\n"
+              "Open the course again after the job finishes to use the new settings or the updated skill.")
     else:
-        if info and info.get("course") == str(ws):
-            stop(ws)  # same course, new settings: restart it
+        stale = None
+        if ours:  # same course, new settings or code: restart it
+            stale = info.get("pid")
+            if stop(ws) is None:
+                sys.exit("The course server has not stopped yet. Run this again in a moment.")
         elif not port_free(cfg["port"]):
             cfg["port"] = next(p for p in range(cfg["port"] + 1, cfg["port"] + 100) if port_free(p))
-        if not start(ws, cfg):
+        if not start(ws, cfg, stale):
             tail = (ws / ".serve.log").read_text(encoding="utf-8", errors="replace")[-1500:] if (ws / ".serve.log").exists() else ""
             sys.exit(f"The course server did not start. Last lines of {ws / '.serve.log'}:\n{tail}")
         print("Started the course server.")

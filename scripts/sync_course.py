@@ -8,6 +8,7 @@ assets/course.css when the course has one. Course-only styling belongs in assets
 never in the shared files, so every course keeps the same look and feel.
 """
 
+import hashlib
 import re
 import shutil
 import sys
@@ -16,6 +17,15 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parent.parent
 SHARED = ["style.css", "theme.js", "quiz.js", "ask.css", "ask.js"]
 PROFILE = Path.home() / ".diagram-design" / "profiles" / "learn.md"
+
+
+def code_version():
+    """A short hash of the code a running server holds in memory. serve.py reports the one it started with, and
+    open_course.py restarts a server whose hash differs from the installed files, so an update reaches it."""
+    digest = hashlib.sha256()
+    for name in ("serve.py", "sync_course.py"):  # everything else the server reads from disk when it needs it
+        digest.update((SKILL / "scripts" / name).read_bytes())
+    return digest.hexdigest()[:12]
 
 
 def pages(ws):

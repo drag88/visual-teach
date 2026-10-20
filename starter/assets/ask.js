@@ -727,7 +727,7 @@
 
   function startTeach(box, action) {
     post("/api/teach", { action })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("the server answered " + r.status))))
+      .then((r) => r.json().catch(() => ({})).then((d) => (r.ok ? d : Promise.reject(new Error(d.error || "the server answered " + r.status)))))
       .then(({ job }) => renderTeach(box, job))
       .catch(async (err) => {
         try {

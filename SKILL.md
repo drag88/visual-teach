@@ -1,8 +1,8 @@
 ---
 name: visual-teach
-description: Teach any topic over several sessions as a local course of short, visual, plain-English lessons that the learner reads in the browser, with live Claude answers on any passage they highlight. Self-contained - it bundles the teach method and diagram-design, its own clean minimal styles, quiz widgets, reading server and checks. Run /visual-teach <topic> to start a course or /visual-teach continue <course folder> to carry on (in Codex, $visual-teach).
+description: Teach any topic over several sessions as a local course of short, visual, plain-English lessons that the learner reads in the browser, with live Claude answers on any passage they highlight. Self-contained - it bundles the teach method and diagram-design, its own clean minimal styles, quiz widgets, reading server and checks. Run /visual-teach <topic> to start a course, /visual-teach continue <course folder> to carry on, or /visual-teach open <course folder> just to read (in Codex, $visual-teach).
 disable-model-invocation: true
-argument-hint: "A topic to learn, or: continue <course folder>"
+argument-hint: "A topic to learn, or: continue <course folder>, or: open <course folder>"
 ---
 
 # Visual teach
@@ -20,7 +20,7 @@ Teach a topic as a course of short, visual lessons the learner reads in the brow
 
 - Claude Code: `/visual-teach <topic>` starts a course. `/visual-teach continue ~/learn/<course>` carries one on. It works from any folder.
 - Codex: `$visual-teach <topic>`, or pick it from `/skills`.
-- Just to read and ask, with no new lesson: `python3 <this skill>/scripts/open_course.py ~/learn/<course>` (on Windows, `python` or `py` in place of `python3`). Add `--stop` to stop the reading server.
+- Just to read and ask, with no new lesson: `/visual-teach open ~/learn/<course>`. Run `python3 <this skill>/scripts/open_course.py <course>` with any page or flags the learner gave (on Windows, `python` or `py` in place of `python3`), pass on the link it prints, and stop: no teaching session. `--stop` stops the reading server. Point learners to this command rather than a script path: a plugin install moves the skill to a new folder with each update.
 - From the course page itself: the course home page has a Teaching section, shown only on the computer running the server (section 8).
 
 ## Every session
@@ -30,7 +30,7 @@ Teach a topic as a course of short, visual lessons the learner reads in the brow
 3. **Catch up.** Read `vendor/teach/METHOD.md` and its format files. Then read the course's `MISSION.md`, `NOTES.md`, `RESOURCES.md`, `learning-records/`, the questions asked while reading, and the quiz results in `quiz.jsonl` (section 6). For a new course, also read the carry-over sheets of other courses (`~/learn/*/reference/carry-over.html`) and build on any overlap (section 4).
 4. **Teach.** Write or revise the next lesson, following sections 1 to 5, and update `index.html` and the reference sheets.
 5. **Check:** section 7.
-6. **Open it:** `python3 <this skill>/scripts/open_course.py <course> <lesson path>`. It starts the course's reading server, or reuses it if already running, and opens the lesson. The server runs on its own, so it keeps going after this session ends. The first time, pass `--code <folder>` when the course has a folder of source files to learn from (a codebase, or text such as markdown chapters, papers or notes), and `--web <domain>` for documentation sites Deep answers may fetch; these are saved in `course.json`. `--lan` adds a link for a phone on the same Wi-Fi. Tell the learner the link and how to stop it.
+6. **Open it:** `python3 <this skill>/scripts/open_course.py <course> <lesson path>`. It brings the course's shared files up to date, starts the course's reading server or reuses it if already running, and opens the lesson. A server running older code or another copy of the skill is restarted, unless it is in the middle of a teaching job. The server runs on its own, so it keeps going after this session ends. The first time, pass `--code <folder>` when the course has a folder of source files to learn from (a codebase, or text such as markdown chapters, papers or notes), and `--web <domain>` for documentation sites Deep answers may fetch; these are saved in `course.json`. `--lan` adds a link for a phone on the same Wi-Fi. Tell the learner the link and how to stop it.
 
 ## 1. Course shape
 
@@ -40,7 +40,7 @@ Teach a topic as a course of short, visual lessons the learner reads in the brow
 - Lessons start from `starter/lesson.html`; reference sheets from `starter/reference.html`.
 - When the course has a source folder, teach with it as the worked example. Cite it as `<p class="src">path:12-20</p>` under a quoted block, or inline as `<code class="src">path:12</code>`, with the path relative to the folder. With the server running, a citation opens the real file beside the lesson, scrolled to those lines. Check each line against the file before using it. Quote code, never data: no credentials, records, query results, logs or details about real people or customers in a lesson or a quiz; use a small made-up example instead. A course folder sits outside the learner's project and its rules, so nothing private may land there.
 - `reference/carry-over.html` (from `starter/reference.html`) collects the course's portable rules (section 4, item 8).
-- `NOTES.md` records that the course uses visual-teach, the analogy mapping (section 2), and the course's `open_course.py` command.
+- `NOTES.md` records that the course uses visual-teach, the analogy mapping (section 2), and how to open it again (`/visual-teach open <course>`).
 
 ## 2. Explain it like the learner is five
 
@@ -139,4 +139,6 @@ Served course pages run only the skill's three shared scripts: `theme.js`, `quiz
 
 ## Changing this skill
 
-After changing `serve.py`, `open_course.py`, `ask.js`, `ask.css`, `quiz.js`, `theme.js` or `style.css`, run `scripts/test_serve.py`, `scripts/test_open_course.py`, `scripts/test_reader.py` and `scripts/test_quiz.py`; they use a fake Claude, so they cost nothing. Then run `sync_course.py` on each course in `~/learn/`.
+After changing `serve.py`, `open_course.py`, `ask.js`, `ask.css`, `quiz.js`, `theme.js` or `style.css`, run `scripts/test_serve.py`, `scripts/test_open_course.py`, `scripts/test_reader.py` and `scripts/test_quiz.py`; they use a fake Claude, so they cost nothing. Opening a course brings it up to date; `sync_course.py` does the same without opening it.
+
+To release: raise the version in `.claude-plugin/plugin.json` (new features raise the middle number, fixes the last), add a matching `CHANGELOG.md` entry and link, run `scripts/test_release.py`, commit, tag `v<version>`, push the tag, and publish a GitHub release with the entry as its notes. Plugin installs update only when the version changes.

@@ -75,6 +75,7 @@ MAX_SOURCE = 512_000
 REVIEW_DAYS = (1, 3, 7)  # wait after a miss, by rights in a row since it; the third right retires the question
 COOKIE = "vt_k"
 WINDOWS = os.name == "nt"
+VERSION = sync_course.code_version()  # taken at start, so a server running older code can tell
 
 
 def rule_path(path):
@@ -483,6 +484,9 @@ class Course:
 
     def start_job(self, action):
         """Start a teaching job in the background. Returns an HTTP status and the job."""
+        if not (SKILL / "SKILL.md").is_file():
+            # A plugin update moved the skill and its old folder was deleted: no guard script, method or check.
+            return 409, "The skill was updated since this server started. Open the course again, then try again."
         refresh = self.settings().get("refresh")
         with self.lock:
             last = self.job
@@ -730,7 +734,8 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path == "/api/ping":
             return self.json({"ok": True, "course": str(course.ws), "tiers": {k: v[0] for k, v in TIERS.items()},
                               "web": course.web, "code": str(course.code) if course.code else None,
-                              "lan": bool(self.server.token), "pid": os.getpid()})
+                              "lan": bool(self.server.token), "pid": os.getpid(), "version": VERSION,
+                              "skill": str(SKILL)})
         if url.path == "/api/threads":
             # keep_blank_values: the course home page is the lesson "", not a request for every lesson
             lesson = parse_qs(url.query, keep_blank_values=True).get("lesson", [None])[0]
@@ -797,7 +802,8 @@ class Handler(SimpleHTTPRequestHandler):
             if body.get("action") not in TEACH_ACTIONS:
                 return self.send_error(400, "Unknown action")
             status, job = course.start_job(body["action"])
-            return self.json({"job": course.job_view()}) if status == 200 else self.send_error(status, job)
+            # A refusal carries its reason as JSON, so the page can say why instead of showing a status number.
+            return self.json({"job": course.job_view()} if status == 200 else {"error": job}, status)
         if path != "/api/ask":
             return self.send_error(404)
         if body.get("kind") not in KIND_TASK:
@@ -832,9 +838,9 @@ class Handler(SimpleHTTPRequestHandler):
         except OSError:
             return True
 
-    def json(self, data):
+    def json(self, data, status=200):
         raw = json.dumps(data, ensure_ascii=False).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")  # source files and review state must never sit in a cache

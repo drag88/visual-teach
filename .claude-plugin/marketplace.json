@@ -1,0 +1,15 @@
+{
+  "name": "visual-teach",
+  "description": "visual-teach: short visual lessons in your browser, with live answers on anything you highlight.",
+  "owner": {
+    "name": "drag88",
+    "url": "https://github.com/drag88"
+  },
+  "plugins": [
+    {
+      "name": "visual-teach",
+      "source": ".",
+      "description": "Learn any topic, or any codebase, as short visual lessons in your browser. Highlight anything and Claude answers beside it."
+    }
+  ]
+}

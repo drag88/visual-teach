@@ -23,6 +23,7 @@ from urllib.parse import quote
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import serve  # noqa: E402
+import sync_course  # noqa: E402
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -394,7 +395,11 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(resp.status, 200)
         self.assertIn("hands out jobs", data)
         resp, data = self.request("GET", "/api/ping")
-        self.assertEqual(json.loads(data)["ok"], True)
+        info = json.loads(data)
+        self.assertEqual(info["ok"], True)
+        # open_course.py restarts a server whose code or skill folder differs from the installed one.
+        self.assertEqual(info["version"], sync_course.code_version())
+        self.assertEqual(info["skill"], str(serve.SKILL))
 
     def test_rejects_cross_site_and_non_json_posts(self):
         resp, _ = self.request("POST", "/api/ask", {"kind": "ask"}, {"Origin": "https://evil.example"})
@@ -594,6 +599,19 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/teach/stop", {})[0].status, 200)
         self.assertEqual(self.wait_job()["state"], "stopped")
         self.assertEqual(self.teach("nonsense")[0].status, 400)
+
+    def test_teach_refuses_once_the_skill_folder_is_gone(self):
+        # A plugin update moves the skill to a new folder and later deletes the old one; this server would then
+        # run a session with no guard script, no SKILL.md and no check.
+        old = serve.SKILL
+        serve.SKILL = self.ws / "deleted-skill"
+        try:
+            resp, body = self.teach("next")
+        finally:
+            serve.SKILL = old
+        self.assertEqual(resp.status, 409)
+        self.assertIn("Open the course again", json.loads(body)["error"])
+        self.assertFalse(self.log.exists(), "no Claude run started")
 
     def test_teach_fix_sends_the_check_problems(self):
         self.server.course.check = lambda *_: (False, "0001-x.html: sentence over 25 words")
