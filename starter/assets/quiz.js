@@ -22,6 +22,7 @@
 // Either way the key goes in data-quiz, and lesson.html#<key> scrolls to that quiz and flashes it.
 // Event: each quiz dispatches a bubbling "quiz" CustomEvent with detail {quiz, type, event, right, q, answer, model}.
 //   "answered" on the first check of mcq, order, match and spot (right true or false), and on a self-mark.
+//   After a miss, mcq and spot offer Try again. A retry is practice: it adds no event and leaves the score alone.
 //   "revealed" when recall or predict shows its answer, with the learner's text and the model text, right null.
 // This file never talks to a server; ask.js listens for the event when a server is running.
 
@@ -40,6 +41,29 @@
   const updateScore = () => {
     const el = scoreEl();
     if (el && asked) el.textContent = `${firstTry} of ${asked} right first time`;
+  };
+
+  // The score counts first tries and review already has the miss, so a retry only clears this quiz's marks.
+  const tryAgain = (quiz, reset, focus) => {
+    const b = document.createElement("button");
+    b.className = "act";
+    b.textContent = "Try again";
+    b.addEventListener("click", () => {
+      b.remove();
+      reset();
+      focus.focus();
+    });
+    quiz.appendChild(b);
+  };
+
+  // A miss names the right answer in words at the start of the feedback: a coloured mark alone is easy to miss,
+  // and some readers cannot see it. Returns the words, so a retry can take them away again.
+  const nameAnswer = (fb, text) => {
+    const answer = document.createElement("span");
+    answer.className = "answer";
+    answer.textContent = text;
+    fb.prepend(answer);
+    return answer;
   };
 
   const TYPES = ["mcq", "recall", "predict", "order", "match", "spot"];
@@ -64,19 +88,32 @@
     buttons.forEach((b) => opts.appendChild(b));
     const fb = quiz.querySelector(".fb");
     let done = false;
+    let tried = false;
     buttons.forEach((b) =>
       b.addEventListener("click", () => {
         if (done) return;
         done = true;
-        asked++;
         const right = b.hasAttribute("data-right");
-        if (right) firstTry++;
         const correct = buttons.find((x) => x.hasAttribute("data-right"));
         b.classList.add(right ? "right" : "wrong");
         correct.classList.add("right");
         if (fb) fb.classList.add("show", right ? "ok" : "no");
-        updateScore();
-        emit(quiz, "answered", right, b.textContent.trim(), correct.textContent.trim());
+        if (!tried) {
+          tried = true;
+          asked++;
+          if (right) firstTry++;
+          updateScore();
+          emit(quiz, "answered", right, b.textContent.trim(), correct.textContent.trim());
+        }
+        if (!right) {
+          const answer = fb && nameAnswer(fb, `The answer is “${correct.textContent.trim()}”. `);
+          tryAgain(quiz, () => {
+            done = false;
+            buttons.forEach((x) => x.classList.remove("right", "wrong"));
+            if (fb) fb.classList.remove("show", "ok", "no");
+            if (answer) answer.remove();
+          }, buttons[0]);
+        }
       })
     );
   });
@@ -218,18 +255,33 @@
     const fb = quiz.querySelector(".fb");
     quiz.insertBefore(clone, fb);
     const parts = [...clone.querySelectorAll("g[data-spot]")];
+    const target = parts.find((x) => x.dataset.spot === quiz.dataset.answer);
+    const label = (target && target.querySelector("text")?.textContent.trim()) || quiz.dataset.answer;
     let done = false;
+    let tried = false;
     const pick = (g) => {
       if (done) return;
       done = true;
-      asked++;
       const right = g.dataset.spot === quiz.dataset.answer;
-      if (right) firstTry++;
       g.classList.add(right ? "right" : "wrong");
       parts.filter((x) => x.dataset.spot === quiz.dataset.answer).forEach((x) => x.classList.add("right"));
       fb.classList.add("show", right ? "ok" : "no");
-      updateScore();
-      emit(quiz, "answered", right);
+      if (!tried) {
+        tried = true;
+        asked++;
+        if (right) firstTry++;
+        updateScore();
+        emit(quiz, "answered", right);
+      }
+      if (!right) {
+        const answer = nameAnswer(fb, `The answer is ${label}, marked in green. `);
+        tryAgain(quiz, () => {
+          done = false;
+          parts.forEach((x) => x.classList.remove("right", "wrong"));
+          fb.classList.remove("show", "ok", "no");
+          answer.remove();
+        }, parts[0]);
+      }
     };
     parts.forEach((g) => {
       g.setAttribute("tabindex", "0");

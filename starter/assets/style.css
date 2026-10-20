@@ -176,7 +176,8 @@ figure.diagram figcaption { font-size: 0.85rem; color: var(--muted); margin-top:
 .quiz.spot g[data-spot] { cursor: pointer; }
 .quiz.spot g[data-spot]:hover rect.box, .quiz.spot g[data-spot]:focus rect.box { stroke-width: 2; }
 .quiz.spot g[data-spot]:focus { outline: none; }
-.quiz.spot g[data-spot].right rect.box { stroke: var(--good); stroke-width: 2; fill: var(--good-bg); }
+.quiz.spot g[data-spot].right rect.box { stroke: var(--good); stroke-width: 3; fill: var(--good-bg); }
+.quiz .fb .answer { font-weight: 600; }
 .quiz.spot g[data-spot].wrong rect.box { stroke: var(--bad); stroke-width: 2; fill: var(--bad-bg); }
 .quiz.spot g[data-spot]:hover rect.hit { fill: var(--note-bg); }
 .quiz.spot g[data-spot].right rect.hit { fill: var(--good-bg); }

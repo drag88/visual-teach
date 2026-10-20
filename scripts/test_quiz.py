@@ -30,6 +30,11 @@ LESSON = f"""<!doctype html>
 <div class="quiz mcq"><p class="q">Which part does the work in this picture, and why?</p>
 <div class="opts"><button class="opt" data-right>The step</button><button class="opt">The input</button></div>
 <p class="fb">The step changes things.</p></div>
+<figure id="fig-parts"><div class="scroll"><svg viewBox="0 0 200 60" width="200" height="60">
+<g data-spot="input"><rect class="box" x="0" y="0" width="80" height="60"/></g>
+<g data-spot="step"><rect class="box" x="120" y="0" width="80" height="60"/><text x="140" y="35">Step</text></g></svg></div></figure>
+<div class="quiz spot" id="q-spot" data-from="fig-parts" data-answer="step"><p class="q">Tap the part that does the work.</p>
+<p class="fb">The step changes things.</p></div>
 <div class="quiz recall" id="q-recall"><p class="q">Say what the step does.</p><div class="model">It turns input into output.</div></div>
 <p class="score" id="score"></p>
 {FILLER}
@@ -37,6 +42,25 @@ LESSON = f"""<!doctype html>
 """
 
 DETAIL_KEYS = {"quiz", "type", "event", "right", "q", "answer", "model"}
+
+
+def retry(quiz, choices, answer_right):
+    """After a miss, Try again clears this quiz only; a right retry is practice, so it adds no event or score."""
+    problems = []
+    again = quiz.locator("button.act", has_text="Try again")
+    if again.count() != 1 or not again.is_visible():
+        return ["a miss offered no Try again button"]
+    again.click()
+    if quiz.locator(f"{choices}.right, {choices}.wrong").count() or quiz.locator(".fb").is_visible():
+        problems.append("Try again left the marks or the explanation on screen")
+    if again.count():
+        problems.append("Try again stayed after it was used")
+    answer_right()
+    if not quiz.locator(f"{choices}.right").count() or "ok" not in quiz.locator(".fb").get_attribute("class"):
+        problems.append("a right retry was not marked right")
+    if again.count():
+        problems.append("a right retry still offered Try again")
+    return problems
 
 
 def run(lesson):
@@ -51,7 +75,7 @@ def run(lesson):
         score = lambda: pg.locator("#score").inner_text()
 
         keys = pg.evaluate("[...document.querySelectorAll('.quiz')].map((q) => q.dataset.quiz)")
-        if keys != ["q-print", MCQ_KEY, "q-recall"]:
+        if keys != ["q-print", MCQ_KEY, "q-spot", "q-recall"]:
             problems.append(f"data-quiz keys are {keys}, not the ids plus {MCQ_KEY}")
 
         predict = pg.locator("#q-print")
@@ -65,10 +89,26 @@ def run(lesson):
 
         mcq = pg.locator(f'[data-quiz="{MCQ_KEY}"]')
         mcq.locator("button.opt:not([data-right])").click()
-        mcq.locator("button.opt[data-right]").click()
+        mcq.locator("button.opt[data-right]").click()  # ignored: the miss stands until Try again
+        if not mcq.locator(".fb").inner_text().startswith("The answer is “The step”. The step changes things."):
+            problems.append(f"an mcq miss did not name the right option: {mcq.locator('.fb').inner_text()!r}")
+        if score() != "0 of 1 right first time":
+            problems.append(f"after one wrong mcq the score reads '{score()}'")
+        problems += [f"mcq: {p}" for p in retry(mcq, "button.opt", lambda: mcq.locator("button.opt[data-right]").click())]
+        if mcq.locator(".fb .answer").count():
+            problems.append("an mcq right retry still names the answer as if it were a miss")
+
+        spot = pg.locator("#q-spot")
+        spot.locator('g[data-spot="input"]').click()
+        if spot.locator(".fb .answer").count() != 1 or not spot.locator(".fb").inner_text().startswith(
+                "The answer is Step, marked in green. The step changes things."):
+            problems.append(f"a spot miss did not name the right part: {spot.locator('.fb').inner_text()!r}")
+        problems += [f"spot: {p}" for p in retry(spot, "g[data-spot]", lambda: spot.locator('g[data-spot="step"]').click())]
+        if spot.locator(".fb .answer").count():
+            problems.append("a right retry still names the answer as if it were a miss")
         graded = score()
-        if graded != "0 of 1 right first time":
-            problems.append(f"after one wrong mcq the score reads '{graded}'")
+        if graded != "0 of 2 right first time":
+            problems.append(f"after a miss and a right retry on each of two quizzes the score reads '{graded}'")
 
         recall = pg.locator("#q-recall")
         recall.locator("textarea").fill("it changes things")
@@ -83,6 +123,7 @@ def run(lesson):
             ("q-print", "predict", "revealed", None),
             ("q-print", "predict", "answered", True),
             (MCQ_KEY, "mcq", "answered", False),
+            ("q-spot", "spot", "answered", False),
             ("q-recall", "recall", "revealed", None),
             ("q-recall", "recall", "answered", False),
         ]
@@ -126,7 +167,8 @@ def main():
         print("\n".join(problems))
         sys.exit(1)
     print("ok: predict reveals, self-marks fire answered and leave the score alone, mcq fires answered,"
-          " an unkeyed quiz gets a k- key and its hash scrolls to it and flashes")
+          " a miss on mcq or spot can be tried again as practice, an unkeyed quiz gets a k- key and its hash"
+          " scrolls to it and flashes")
 
 
 if __name__ == "__main__":
