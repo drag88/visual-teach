@@ -2,6 +2,13 @@
 
 Notable changes to visual-teach. Versions follow [semantic versioning](https://semver.org): new features raise the middle number, fixes the last one. `.claude-plugin/plugin.json` carries the same version, and Claude Code installs with auto-update get a release when that number changes.
 
+## [1.2.1] - 2026-10-20
+
+### Fixed
+
+- A missed tap-the-diagram question names the right part even when that part's line and bars are a separate group, instead of showing its id.
+- The lesson rule for sequence diagrams now puts each actor's line and bars in a second group drawn under the arrows, so an arrow that crosses the line still takes its own tap. The 1.2.0 wording moved them into the box's group, which covers those arrows.
+
 ## [1.2.0] - 2026-10-20
 
 ### Added
@@ -56,6 +63,7 @@ First public release.
 - Light and dark themes, a phone layout, and a phone link with `--lan`.
 - Windows process and path handling.
 
+[1.2.1]: https://github.com/drag88/visual-teach/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/drag88/visual-teach/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/drag88/visual-teach/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/drag88/visual-teach/releases/tag/v1.0.0
