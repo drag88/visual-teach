@@ -222,6 +222,23 @@ class SyncTagTest(unittest.TestCase):
         shutil.rmtree(ws)
 
 
+class SyncParseTest(unittest.TestCase):
+    def test_tags_are_read_as_html_not_as_text(self):
+        import sync_course
+        ws = Path(tempfile.mkdtemp())
+        (ws / "lessons").mkdir()
+        page = ws / "lessons" / "three.html"
+        page.write_text('<html><head><link rel="preload" as="style" href="../assets/style.css"></head><body><main></main>'
+                        '<script data-example=" src=\'../assets/ask.js\'"></script>'
+                        '<script title=">" src="../assets/quiz.js"></script></body></html>')
+        sync_course.link_assets(page, ws)
+        html = page.read_text()
+        self.assertIn('<link rel="stylesheet" href="../assets/style.css">', html, "a preload does not apply a stylesheet")
+        self.assertIn('<script src="../assets/ask.js"></script>', html, "src inside another attribute loads nothing")
+        self.assertEqual(html.count("assets/quiz.js"), 1, "a > inside a quoted attribute is still one tag")
+        shutil.rmtree(ws)
+
+
 class LanSettingTest(StubbedOpen):
     def test_no_lan_turns_the_phone_link_off(self):
         self.oc.ping = lambda port, token=None: None

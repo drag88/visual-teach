@@ -368,6 +368,13 @@ class ServeTest(unittest.TestCase):
         self.assertIn('about "the runner hands out jobs"', stdin)
         self.assertIn("--session-id", self.calls()[-1]["argv"], "a new session, since none was saved")
 
+    def test_follow_up_to_an_unanswered_connect_keeps_its_topic(self):
+        self.server.course.append({"t": serve.now(), "thread": "t-connect", "lesson": "lessons/one.html", "kind": "connect",
+                                   "mode": "quick", "topic": "Tools", "selection": "the runner", "role": "user",
+                                   "text": serve.KIND_TASK["connect"]})
+        self.ask(thread="t-connect", question="Explain it again", selection=None, para=None)
+        self.assertIn('connecting it to "Tools"', self.calls()[-1]["stdin"])
+
     def test_failure_words(self):
         ok = {"returncode": 0, "stderr": "", "error": None}
         self.assertIsNone(serve.failure(ok))

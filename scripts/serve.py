@@ -185,7 +185,12 @@ class Course:
         for r in self.records():
             if r.get("thread") == thread and r.get("role") in ("user", "assistant"):
                 who = "Learner" if r["role"] == "user" else "You answered"
-                about = f' (about "{r["selection"]}")' if r["role"] == "user" and r.get("selection") else ""
+                notes = []
+                if r["role"] == "user" and r.get("selection"):
+                    notes.append(f'about "{r["selection"]}"')
+                if r["role"] == "user" and r.get("topic"):
+                    notes.append(f'connecting it to "{r["topic"]}"')
+                about = f" ({', '.join(notes)})" if notes else ""
                 lines.append(f"{who}{about}: {r.get('text', '')}")
         return "\n\n".join(lines)
 

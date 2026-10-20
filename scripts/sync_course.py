@@ -12,7 +12,9 @@ import hashlib
 import re
 import shutil
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlsplit
 
 SKILL = Path(__file__).resolve().parent.parent
 SHARED = ["style.css", "theme.js", "quiz.js", "ask.css", "ask.js"]
@@ -40,27 +42,37 @@ def drifted(ws):
             or (ws / "assets" / n).read_bytes() != (src / n).read_bytes()]
 
 
-def loads(html, prefix, name):
-    """True when a real tag on the page loads assets/<name>, however it is written: any case, "/>", defer, a query
-    string. A data-src, or a tag inside a comment, loads nothing, so neither counts."""
-    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
-    tag, attr = ("script", "src") if name.endswith(".js") else ("link", "href")
-    path = re.escape(f"{prefix}assets/{name}")
-    return re.search(rf"""<{tag}\b[^>]*\s{attr}\s*=\s*["']?{path}(?:[?#][^"'\s>]*)?(?=["'\s>])""", html, re.I) is not None
+class Loaded(HTMLParser):
+    """The paths a page really loads: each script's src and each stylesheet link's href, without query strings.
+    Read as HTML, so a comment, a data-src or a preload link loads nothing, however the tag is written."""
+
+    def __init__(self, html):
+        super().__init__()
+        self.paths = set()
+        self.feed(html)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        a = {k: v or "" for k, v in attrs}
+        if tag == "script" and a.get("src"):
+            self.paths.add(urlsplit(a["src"]).path)
+        elif tag == "link" and "stylesheet" in a.get("rel", "").lower().split() and a.get("href"):
+            self.paths.add(urlsplit(a["href"]).path)
 
 
 def link_assets(page, ws):
     prefix = "" if page.parent == ws else "../"
     html = page.read_text(encoding="utf-8")
     original = html
+    loaded = Loaded(html).paths
     sheets = ["style.css", "ask.css"] + (["course.css"] if (ws / "assets" / "course.css").exists() else [])
     tags = [(s, f'<link rel="stylesheet" href="{prefix}assets/{s}">') for s in sheets]
     tags.append(("theme.js", f'<script src="{prefix}assets/theme.js"></script>'))  # in <head>, so the theme is set before paint
-    missing = [tag for name, tag in tags if not loads(html, prefix, name)]
+    missing = [tag for name, tag in tags if f"{prefix}assets/{name}" not in loaded]
     if missing:
         html = html.replace("</head>", "\n".join(missing) + "\n</head>", 1)
     scripts = [(s, f'<script src="{prefix}assets/{s}"></script>') for s in ("quiz.js", "ask.js")]
-    missing = [tag for name, tag in scripts if not loads(html, prefix, name)]
+    missing = [tag for name, tag in scripts if f"{prefix}assets/{name}" not in loaded]
     if missing:
         html = re.sub(r"</body>", "\n".join(missing) + "\n</body>", html, count=1)
     if html != original:
