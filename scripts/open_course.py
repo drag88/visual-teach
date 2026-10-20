@@ -130,8 +130,8 @@ def stop(ws, if_idle=False):
         (ws / ".serve.json").unlink(missing_ok=True)
         return False
     answer = request_shutdown(port, token, if_idle)  # a clean stop ends its Claude runs and tidies up
-    if answer == "busy":
-        return "busy"
+    if answer == "busy" or (if_idle and not answer):
+        return "busy"  # nothing confirmed it idle, and a job may have started, so only --stop forces a stop
     if not answer:
         if WINDOWS:  # no SIGTERM handling there: taskkill /T ends the server and what it started
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, text=True)
@@ -253,7 +253,7 @@ def main():
     # With --lan the server wants its token from this computer too, and each start makes a new one.
     page, _, fragment = args.page.lstrip("/").partition("#")
     token = token_of(read_json(ws / ".serve.json"))
-    url = (f"http://localhost:{cfg['port']}/{page}" + (f"?k={token}" if token else "")
+    url = (f"http://localhost:{cfg['port']}/{page}" + (("&" if "?" in page else "?") + f"k={token}" if token else "")
            + (f"#{fragment}" if fragment else ""))
     print(f"Open: {url}")
     phone = read_json(ws / ".serve.json").get("phone_url")

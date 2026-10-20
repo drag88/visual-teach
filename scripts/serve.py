@@ -798,9 +798,12 @@ class Handler(SimpleHTTPRequestHandler):
                 course.closing = course.closing or not busy
             if busy:
                 return self.json({"error": "A teaching job is running."}, 409)
-            self.json({"ok": True})
-            # A clean stop ends the Claude runs and removes the temporary files; a forced one would leave both.
-            threading.Thread(target=lambda: (self.server.shutdown(), self.server.server_close()), daemon=True).start()
+            try:
+                self.json({"ok": True})
+            finally:
+                # Stop even if the reply never arrives: closing is already set, so a server left running would refuse
+                # teaching for good. A clean stop ends the Claude runs and removes the temporary files.
+                threading.Thread(target=lambda: (self.server.shutdown(), self.server.server_close()), daemon=True).start()
             return
         if path in ("/api/teach", "/api/teach/stop"):
             if not self.local():

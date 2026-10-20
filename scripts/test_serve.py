@@ -133,6 +133,9 @@ class ServeTest(unittest.TestCase):
         fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
         self.log = base / "claude.log"
         os.environ["FAKE_CLAUDE_LOG"] = str(self.log)
+        # Teaching jobs sync the course, which installs the diagram profile; keep it out of the real home folder.
+        self.addCleanup(setattr, sync_course, "PROFILE", sync_course.PROFILE)
+        sync_course.PROFILE = base / "profile.md"
         for k in ("FAKE_CLAUDE_FAIL_RESUME", "FAKE_CLAUDE_FAIL", "FAKE_READ", "FAKE_CLAUDE_SLOW",
                   "FAKE_CLAUDE_IS_ERROR", "FAKE_TEXT"):
             os.environ.pop(k, None)

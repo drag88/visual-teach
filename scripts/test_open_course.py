@@ -328,6 +328,30 @@ class RestartSafetyTest(unittest.TestCase):
         self.assertIn("may be running a teaching job", self.main())
         self.assertEqual(self.synced, [])
 
+    def test_a_failed_if_idle_request_never_falls_back_to_a_kill(self):
+        # Nothing confirmed the server idle, so a job may have started; only --stop forces a stop.
+        server = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        threading.Thread(target=server.wait, daemon=True).start()
+        (self.ws / ".serve.json").write_text(json.dumps({"pid": server.pid, "port": 1}))
+        old = self.oc.ping, self.oc.request_shutdown
+        self.oc.ping = lambda port, token=None: {**self.old, "pid": server.pid}
+        self.oc.request_shutdown = lambda port, token=None, if_idle=False: False  # timed out
+        try:
+            self.assertEqual(self.oc.stop(self.ws, if_idle=True), "busy")
+            self.assertIsNone(server.poll(), "the server and its job were left running")
+        finally:
+            self.oc.ping, self.oc.request_shutdown = old
+            server.kill()
+
+    def test_the_token_joins_a_query_the_page_already_has(self):
+        self.oc.ping = lambda port, token=None: None
+        self.oc.port_free = lambda port: True
+        def start(ws, cfg, stale_pid=None):
+            (ws / ".serve.json").write_text(json.dumps({"phone_url": "http://192.0.2.1:1/?k=tok"}))
+            return True
+        self.oc.start = start
+        self.assertIn("Open: http://localhost:1/lessons/x.html?view=1&k=tok#q-one", self.main("lessons/x.html?view=1#q-one"))
+
     def test_the_opened_link_carries_the_phone_token(self):
         # With --lan the server wants the token from this computer too, and a restart makes a new one.
         self.oc.ping = lambda port, token=None: None
@@ -358,6 +382,25 @@ class SyncSafetyTest(unittest.TestCase):
         self.assertEqual(outside.read_text(), "someone else's file\n")
         self.assertFalse((ws / "assets" / "style.css").is_symlink())
         self.assertEqual((ws / "assets" / "style.css").read_bytes(), (HERE.parent / "starter/assets/style.css").read_bytes())
+        shutil.rmtree(base)
+
+    def test_a_linked_asset_is_replaced_even_when_its_bytes_match(self):
+        # The server never serves a file from outside the course, so a link would leave the page without its script.
+        import sync_course
+        base = Path(tempfile.mkdtemp())
+        same = base / "same-ask.js"
+        shutil.copy(HERE.parent / "starter" / "assets" / "ask.js", same)
+        ws = base / "course"
+        shutil.copytree(HERE.parent / "starter" / "assets", ws / "assets")
+        (ws / "assets" / "ask.js").unlink()
+        (ws / "assets" / "ask.js").symlink_to(same)
+        old_profile, sync_course.PROFILE = sync_course.PROFILE, base / "profile.md"
+        try:
+            changed, _ = sync_course.sync(ws)
+        finally:
+            sync_course.PROFILE = old_profile
+        self.assertIn("ask.js", changed)
+        self.assertFalse((ws / "assets" / "ask.js").is_symlink())
         shutil.rmtree(base)
 
 

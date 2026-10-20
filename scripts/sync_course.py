@@ -33,9 +33,11 @@ def pages(ws):
 
 
 def drifted(ws):
-    """Shared files in the course that differ from the skill's."""
+    """Shared files in the course that differ from the skill's. A link counts even when its bytes match: the server
+    never serves a file from outside the course, so the page would go without it."""
     src = SKILL / "starter" / "assets"
-    return [n for n in SHARED if not (ws / "assets" / n).exists() or (ws / "assets" / n).read_bytes() != (src / n).read_bytes()]
+    return [n for n in SHARED if (ws / "assets" / n).is_symlink() or not (ws / "assets" / n).exists()
+            or (ws / "assets" / n).read_bytes() != (src / n).read_bytes()]
 
 
 def link_assets(page, ws):
