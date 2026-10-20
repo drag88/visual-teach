@@ -510,7 +510,26 @@ def check_teaching(base, course, shots):
                 lesson_page.locator(".ask-teach").wait_for(state="visible", timeout=5000)
             except Exception:
                 problems.append(f"teaching ({name}): a link to #teach does not open the panel")
+            lesson_page.goto(f"{base}/lessons/0001-lesson.html")
+            lesson_page.locator(".ask-teach-toggle").wait_for()
+            lesson_page.evaluate("location.hash = 'teach'")
+            try:
+                lesson_page.locator(".ask-teach").wait_for(state="visible", timeout=3000)
+            except Exception:
+                problems.append(f"teaching ({name}): going to #teach on an open page does not open the panel")
             lesson_page.close()
+            # A failed refresh shows why, from its own output.
+            (course.ws / "course.json").write_text(json.dumps({"refresh": "echo the copy is out of date; exit 1"}))
+            refresh_page = browser.new_page(viewport={"width": width, "height": 900})
+            refresh_page.goto(f"{base}/")
+            refresh_page.locator(".ask-teach-toggle").click()
+            refresh_page.locator(".ask-teach-actions button", has_text="Refresh the source copy").click()
+            try:
+                refresh_page.locator(".ask-teach", has_text="the copy is out of date").wait_for(timeout=10000)
+            except Exception:
+                problems.append(f"teaching ({name}): a failed refresh does not show its output")
+            refresh_page.close()
+            (course.ws / "course.json").unlink()
             other = browser.new_page(viewport={"width": width, "height": 900})
             other.goto(f"{base}/")
             other.locator(".ask-teach-toggle").click()
@@ -525,6 +544,11 @@ def check_teaching(base, course, shots):
             else:
                 if "Teaching" not in other.locator(".ask-teach-toggle").inner_text():
                     problems.append(f"teaching ({name}): the Teach button does not show the running job")
+                # Polling every two seconds must not rebuild an unchanged panel, which drops focus and closes folds.
+                other.locator(".ask-teach button", has_text="Stop").focus()
+                other.wait_for_timeout(2600)
+                if other.evaluate("document.activeElement.textContent") != "Stop":
+                    problems.append(f"teaching ({name}): the panel's focus is lost while a job runs")
                 other.locator(".ask-teach button", has_text="Stop").click()
             os.environ.pop("FAKE_CLAUDE_SLOW", None)
             other.locator(".ask-teach-ended.stopped").wait_for(timeout=15000)

@@ -733,7 +733,9 @@
       bar.prepend(toggle); // left of the light/dark switch
       bar.append(panel);
       renderTeach(info.job);
-      if (location.hash === "#teach") setTeachOpen(true);
+      const fromHash = () => { if (location.hash === "#teach") setTeachOpen(true); };
+      fromHash();
+      addEventListener("hashchange", fromHash);
     }).catch(() => {});
   }
 
@@ -784,8 +786,16 @@
     const { toggle, panel } = teach;
     const running = Boolean(job && job.state === "running");
     clearTimeout(teachTimer); // a start from this page renders without pollTeach, so one may be waiting
+    if (running) teachTimer = setTimeout(pollTeach, 2000);
     toggle.classList.toggle("running", running);
     toggle.textContent = running ? `Teaching · ${minutes(job.started)}` : "Teach";
+    // Rebuild only when something shown has changed: rebuilding on every poll would drop the learner's focus and
+    // close Earlier steps while they read it.
+    const shown = JSON.stringify([job, running && minutes(job.started), teach.refresh]);
+    if (shown === teach.shown) return;
+    teach.shown = shown;
+    // The control the learner was on (Stop, say), found again by its label after the rebuild.
+    const focused = panel.contains(document.activeElement) ? document.activeElement.textContent : null;
     panel.replaceChildren(textLine("ask-teach-title", "Teaching"));
     if (running) {
       const now = node("p", "ask-teach-now");
@@ -794,6 +804,8 @@
       panel.append(now, textLine("ask-teach-step", job.lines.length ? job.lines[job.lines.length - 1] : "Starting…"));
       if (job.lines.length > 1) {
         const log = node("details", "ask-teach-log");
+        log.open = Boolean(teach.logOpen);
+        log.addEventListener("toggle", () => { teach.logOpen = log.open; });
         const list = node("ol");
         for (const text of job.lines.slice(-8, -1).reverse()) list.append(Object.assign(node("li"), { textContent: text }));
         log.append(Object.assign(node("summary"), { textContent: "Earlier steps" }), list);
@@ -802,7 +814,7 @@
       const stop = button("Stop", () => post("/api/teach/stop", {}).then(pollTeach).catch(() => {}));
       stop.className = "ask-teach-stop";
       panel.append(stop);
-      teachTimer = setTimeout(pollTeach, 2000);
+      refocus(focused);
       return;
     }
     if (job) {
@@ -816,6 +828,10 @@
         panel.append(summary);
       }
       if (job.error) panel.append(textLine("ask-error", job.error));
+      // A refresh's output is its result, and a failed job's last lines say where it stopped.
+      if (job.lines.length && (job.action === "refresh" || job.state === "failed")) {
+        panel.append(Object.assign(node("pre", "ask-teach-check"), { textContent: job.lines.slice(-5).join("\n") }));
+      }
       if (job.check) {
         const passed = job.check.ok === true;
         panel.append(textLine(`ask-teach-verdict ${passed ? "ok" : "no"}`, passed ? "The course check passed."
@@ -835,6 +851,13 @@
       actions.append(button(TEACH_LABEL[action], () => startTeach(action)));
     }
     panel.append(actions);
+    refocus(focused);
+  }
+
+  function refocus(label) {
+    if (label === null) return;
+    const again = [...teach.panel.querySelectorAll("button, summary, a")].find((el) => el.textContent === label);
+    (again || teach.panel).focus();
   }
 
   // Where cards go: the right margin on wide screens, under the paragraph otherwise.
