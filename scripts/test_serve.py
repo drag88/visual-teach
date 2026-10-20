@@ -356,6 +356,18 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(self.finished_runs(), [], "claude kept running after the reader left")
         self.assertFalse(any(r["role"] == "assistant" for r in self.records()))
 
+    def test_follow_up_to_an_unanswered_question_carries_what_was_asked(self):
+        # The first answer never finished, so no Claude session was saved; the follow-up starts a new one and
+        # must hand over the original question and the passage it was about.
+        self.server.course.append({"t": serve.now(), "thread": "t-lost", "lesson": "lessons/one.html", "kind": "explain",
+                                   "mode": "quick", "selection": "the runner hands out jobs", "role": "user",
+                                   "text": serve.KIND_TASK["explain"]})
+        self.ask(thread="t-lost", question="Explain it again", selection=None, para=None)
+        stdin = self.calls()[-1]["stdin"]
+        self.assertIn("The conversation so far", stdin)
+        self.assertIn('about "the runner hands out jobs"', stdin)
+        self.assertIn("--session-id", self.calls()[-1]["argv"], "a new session, since none was saved")
+
     def test_failure_words(self):
         ok = {"returncode": 0, "stderr": "", "error": None}
         self.assertIsNone(serve.failure(ok))

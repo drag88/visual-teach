@@ -185,7 +185,8 @@ class Course:
         for r in self.records():
             if r.get("thread") == thread and r.get("role") in ("user", "assistant"):
                 who = "Learner" if r["role"] == "user" else "You answered"
-                lines.append(f"{who}: {r.get('text', '')}")
+                about = f' (about "{r["selection"]}")' if r["role"] == "user" and r.get("selection") else ""
+                lines.append(f"{who}{about}: {r.get('text', '')}")
         return "\n\n".join(lines)
 
     # Prompts
@@ -398,6 +399,10 @@ class Course:
 
         resumed = bool(session)
         session = session or str(uuid.uuid4())
+        if follow_up and not resumed:
+            # No Claude session was saved for this thread (its first answer never finished), so the new one is
+            # handed what was asked.
+            prompt = f"The conversation so far:\n\n{history}\n\n{prompt}"
         result = self.run(self.command(tier, session, resumed), prompt, send, gone)
         if result is None:
             return

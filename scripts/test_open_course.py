@@ -205,6 +205,23 @@ class SyncTest(unittest.TestCase):
         shutil.rmtree(ws)
 
 
+class SyncTagTest(unittest.TestCase):
+    def test_only_a_real_tag_counts_as_loading(self):
+        import sync_course
+        ws = Path(tempfile.mkdtemp())
+        (ws / "lessons").mkdir()
+        page = ws / "lessons" / "two.html"
+        page.write_text('<html><head><script data-src="../assets/theme.js"></script></head><body><main></main>'
+                        '<!-- <script src="../assets/ask.js"></script> -->'
+                        '<SCRIPT SRC="../assets/quiz.js?v=2"></SCRIPT></body></html>')
+        sync_course.link_assets(page, ws)
+        html = page.read_text()
+        self.assertIn('<script src="../assets/theme.js"></script>', html, "data-src loads nothing")
+        self.assertIn('<script src="../assets/ask.js"></script>\n</body>', html, "a commented-out tag loads nothing")
+        self.assertEqual(html.lower().count("assets/quiz.js"), 1, "SRC= with a query string already loads it")
+        shutil.rmtree(ws)
+
+
 class LanSettingTest(StubbedOpen):
     def test_no_lan_turns_the_phone_link_off(self):
         self.oc.ping = lambda port, token=None: None

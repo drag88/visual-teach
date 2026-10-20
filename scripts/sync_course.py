@@ -41,8 +41,12 @@ def drifted(ws):
 
 
 def loads(html, prefix, name):
-    """True when the page already loads assets/<name>, however its tag is written (a "/>", a defer, single quotes)."""
-    return re.search(rf"""(?:href|src)\s*=\s*["']{re.escape(prefix)}assets/{re.escape(name)}["']""", html) is not None
+    """True when a real tag on the page loads assets/<name>, however it is written: any case, "/>", defer, a query
+    string. A data-src, or a tag inside a comment, loads nothing, so neither counts."""
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    tag, attr = ("script", "src") if name.endswith(".js") else ("link", "href")
+    path = re.escape(f"{prefix}assets/{name}")
+    return re.search(rf"""<{tag}\b[^>]*\s{attr}\s*=\s*["']?{path}(?:[?#][^"'\s>]*)?(?=["'\s>])""", html, re.I) is not None
 
 
 def link_assets(page, ws):
