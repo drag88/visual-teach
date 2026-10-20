@@ -278,13 +278,16 @@ class Course:
         return cmd
 
     def describe(self, tool):
+        """One short line for the page: course and source paths relative, the skill's files by name, long search
+        patterns cut, since the line sits in a narrow card or panel."""
         name, args = tool.get("name"), tool.get("input") or {}
+        clip = lambda text: text if len(text) <= 40 else text[:39] + "…"  # noqa: E731
         if name == "Read":
             return f"Reading {self.short(args.get('file_path', ''))}"
         if name == "Grep":
-            return f'Searching for "{args.get("pattern", "")}"'
+            return f'Searching for "{clip(str(args.get("pattern", "")))}"'
         if name == "Glob":
-            return f"Looking for {args.get('pattern', '')}"
+            return f"Looking for {clip(str(args.get('pattern', '')))}"
         if name == "WebFetch":
             return f"Fetching {args.get('url', '')}"
         if name in ("Edit", "Write"):
@@ -299,6 +302,12 @@ class Course:
                     return str(p.resolve().relative_to(root))
                 except ValueError:
                     continue
+        if p.is_absolute():
+            try:
+                p.resolve().relative_to(SKILL)
+                return f"the skill's {p.name}"
+            except ValueError:
+                pass
         return path
 
     # Running Claude

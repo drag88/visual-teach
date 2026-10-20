@@ -454,7 +454,8 @@ def check_theme(base):
 
 
 def check_teaching(base, course, shots):
-    """The course home page starts teaching sessions, shows their progress and check, and offers a fix."""
+    """Teach, beside the light/dark switch on every page, opens a panel that starts sessions, shows their progress
+    and check, and offers a fix."""
     problems = []
     os.environ.pop("FAKE_TEXT", None)  # the default fake answer, not the hostile one this server started with
     with sync_playwright() as p:
@@ -463,47 +464,56 @@ def check_teaching(base, course, shots):
             course.check = lambda *_: (True, "ok: 3 pages, 1 lessons")
             pg = browser.new_page(viewport={"width": width, "height": 900})
             pg.goto(f"{base}/")
-            pg.wait_for_selector(".ask-teach button")
-            # Easy to find: right under the lesson list, before the reference sheets, with an anchor to link to.
-            if not pg.evaluate("""(() => { const t = document.querySelector('#teach.ask-teach'), r = [...document.querySelectorAll('h2')].find((h) => h.textContent === 'Reference');
-                return Boolean(t && r && (t.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING)); })()"""):
-                problems.append(f"teaching ({name}): the Teaching section is not right under the lessons")
-            labels = pg.locator(".ask-teach button").all_inner_texts()
+            toggle = pg.locator(".top-bar .ask-teach-toggle")
+            toggle.wait_for()
+            if pg.evaluate("[...document.querySelector('.top-bar').children].map((c) => c.className).filter((c) => c !== 'ask-teach').join(' ')") != "ask-teach-toggle theme-toggle":
+                problems.append(f"teaching ({name}): Teach is not beside the light/dark switch")
+            if pg.locator("main .ask-teach").count():
+                problems.append(f"teaching ({name}): a Teaching section is still in the page")
+            if pg.locator(".ask-teach").is_visible():
+                problems.append(f"teaching ({name}): the panel is open before Teach is pressed")
+            toggle.click()
+            labels = pg.locator(".ask-teach-actions button").all_inner_texts()
             if labels != ["Teach the next lesson", "Update lessons from my questions"]:
                 problems.append(f"teaching ({name}): buttons are {labels}")
-            pg.locator(".ask-teach button", has_text="Teach the next lesson").click()
+            box = pg.locator(".ask-teach").bounding_box()
+            if box["x"] < 0 or box["x"] + box["width"] > width:
+                problems.append(f"teaching ({name}): the panel runs off the screen")
+            pg.locator(".ask-teach-actions button", has_text="Teach the next lesson").click()
             pg.locator(".ask-teach-summary", has_text="office manager").wait_for()
-            pg.locator(".ask-teach-check", has_text="ok: 3 pages").wait_for()
-            if pg.locator(".ask-teach button:disabled").count():
-                problems.append(f"teaching ({name}): buttons stay disabled after the job")
+            pg.locator(".ask-teach-verdict.ok").wait_for()
             if not pg.locator(".ask-teach a", has_text="Reload").count():
                 problems.append(f"teaching ({name}): no way to see the updated pages")
             course.check = lambda *_: (False, "0001-lesson.html: sentence over 25 words")
-            pg.locator(".ask-teach button", has_text="Update lessons").click()
+            pg.locator(".ask-teach-actions button", has_text="Update lessons").click()
             fix = pg.locator(".ask-teach button", has_text="Ask Claude to fix these")
             fix.wait_for()
             pg.locator(".ask-teach-check", has_text="sentence over 25 words").wait_for()
             course.check = lambda *_: (True, "ok")
             fix.click()
-            pg.locator(".ask-teach-check", has_text="ok").wait_for()
+            pg.locator(".ask-teach-verdict.ok").wait_for()
             if pg.evaluate("document.documentElement.scrollWidth > window.innerWidth"):
                 problems.append(f"teaching ({name}): page scrolls sideways")
             if shots:
-                pg.locator(".ask-teach").screenshot(path=str(shots / f"teaching-{name}.png"))
+                pg.screenshot(path=str(shots / f"teaching-{name}.png"))
+            pg.keyboard.press("Escape")
+            if pg.locator(".ask-teach").is_visible():
+                problems.append(f"teaching ({name}): Escape does not close the panel")
             lesson_page = browser.new_page(viewport={"width": width, "height": 900})
             lesson_page.goto(f"{base}/lessons/0001-lesson.html")
-            lesson_page.wait_for_selector("body.ask-on")
-            link = lesson_page.locator("a.ask-next", has_text="next lesson")
             try:
-                link.wait_for(timeout=5000)
-                if not link.get_attribute("href").endswith("index.html#teach"):
-                    problems.append(f"teaching ({name}): the lesson's next-lesson link goes to {link.get_attribute('href')}")
+                lesson_page.locator(".top-bar .ask-teach-toggle").wait_for(timeout=5000)
             except Exception:
-                problems.append(f"teaching ({name}): a lesson page does not point to where the next lesson is taught")
+                problems.append(f"teaching ({name}): a lesson page has no Teach button")
+            lesson_page.goto(f"{base}/index.html#teach")
+            try:
+                lesson_page.locator(".ask-teach").wait_for(state="visible", timeout=5000)
+            except Exception:
+                problems.append(f"teaching ({name}): a link to #teach does not open the panel")
             lesson_page.close()
             other = browser.new_page(viewport={"width": width, "height": 900})
             other.goto(f"{base}/")
-            other.wait_for_selector(".ask-teach button")
+            other.locator(".ask-teach-toggle").click()
             os.environ["FAKE_CLAUDE_SLOW"] = "1"
             pg.evaluate("""fetch('/api/teach', {method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({action: 'next'})})""")
@@ -513,9 +523,11 @@ def check_teaching(base, course, shots):
             except Exception:
                 problems.append(f"teaching ({name}): a second tab did not show the job already running")
             else:
+                if "Teaching" not in other.locator(".ask-teach-toggle").inner_text():
+                    problems.append(f"teaching ({name}): the Teach button does not show the running job")
                 other.locator(".ask-teach button", has_text="Stop").click()
             os.environ.pop("FAKE_CLAUDE_SLOW", None)
-            other.locator(".ask-teach-state", has_text="stopped").wait_for(timeout=15000)
+            other.locator(".ask-teach-ended.stopped").wait_for(timeout=15000)
             other.close()
             pg.close()
         browser.close()

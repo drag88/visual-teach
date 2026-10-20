@@ -23,6 +23,13 @@
       label();
     });
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", label);
-    document.body.prepend(b);
+    // The row at the top right, shared with ask.js's Teach button, whichever script gets there first.
+    let bar = document.querySelector(".top-bar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.className = "top-bar";
+      document.body.prepend(bar);
+    }
+    bar.append(b);
   });
 })();

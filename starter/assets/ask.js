@@ -79,10 +79,8 @@
       }
     }
     document.addEventListener("quiz", onQuiz);
-    if (/^\/(index\.html)?$/.test(location.pathname)) {
-      showReview();
-      showTeach();
-    } else showNextLink();
+    if (/^\/(index\.html)?$/.test(location.pathname)) showReview();
+    showTeach();
   }
 
   let topicsLoaded = false;
@@ -695,116 +693,148 @@
     }).catch(() => {});
   }
 
-  // Teaching from the course home page: start a session, follow its steps, then see the course check.
-  // The job runs on the server, so it carries on if this page is closed; the page checks on it while open.
+  // Teaching: a Teach button beside the light/dark switch, on every page of the computer running the server, opens a
+  // small panel to start a session, follow it and see the course check. The job runs on the server, so it carries
+  // on if the page closes; an open page checks on it every two seconds while it runs.
 
   const TEACH_LABEL = {
     next: "Teach the next lesson", update: "Update lessons from my questions",
     refresh: "Refresh the source copy", fix: "Fix the check problems",
   };
+  const TEACH_DOING = {
+    next: "Writing the next lesson", update: "Updating lessons from your questions",
+    refresh: "Refreshing the source copy", fix: "Fixing the check problems",
+  };
+  const TEACH_ENDED = { done: "Done", stopped: "Stopped", failed: "Failed" };
   let teachTimer = 0;
+  let teach = null; // { toggle, panel, refresh }
 
   function showTeach() {
     getJSON("/api/teach").then((info) => {
       if (!info.allowed) return;
-      const box = node("section", "ask-teach");
-      const head = node("h2");
-      head.textContent = "Teaching";
-      const note = node("p", "ask-teach-note");
-      note.textContent = "Runs a teaching session with Claude (Opus) in this course's folder. "
-        + "It takes about 5 to 15 minutes and keeps going if you close the page.";
-      const actions = node("div", "ask-teach-actions");
-      for (const action of ["next", "update", ...(info.refresh ? ["refresh"] : [])]) {
-        actions.append(button(TEACH_LABEL[action], () => startTeach(box, action)));
-      }
-      box.id = "teach";
-      box.append(head, note, actions, node("div", "ask-teach-status"));
-      // Right under the lesson list (and the review list when there is one), where the next lesson is looked for.
-      const lists = main.querySelectorAll("ol.syllabus");
-      const after = main.querySelector(".ask-review-later") || main.querySelector(".ask-review") || lists[lists.length - 1];
-      if (after) after.after(box);
-      else main.append(box);
-      renderTeach(box, info.job);
-      if (location.hash === "#teach") box.scrollIntoView({ block: "start" });
+      const toggle = node("button", "ask-teach-toggle");
+      toggle.type = "button";
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.setAttribute("aria-controls", "teach");
+      const panel = node("section", "ask-teach");
+      Object.assign(panel, { id: "teach", hidden: true, tabIndex: -1 });
+      panel.setAttribute("aria-label", "Teaching");
+      teach = { toggle, panel, refresh: info.refresh };
+      toggle.addEventListener("click", () => setTeachOpen(panel.hidden));
+      document.addEventListener("click", (e) => {
+        if (!panel.hidden && !panel.contains(e.target) && !toggle.contains(e.target)) setTeachOpen(false);
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape" || panel.hidden) return;
+        setTeachOpen(false);
+        toggle.focus();
+      });
+      const bar = topBar();
+      bar.prepend(toggle); // left of the light/dark switch
+      bar.append(panel);
+      renderTeach(info.job);
+      if (location.hash === "#teach") setTeachOpen(true);
     }).catch(() => {});
   }
 
-  // On a lesson page, point to where the next lesson is taught (only where teaching is allowed).
-  function showNextLink() {
-    getJSON("/api/teach").then((info) => {
-      if (!info.allowed) return;
-      const line = node("p", "ask-next-line");
-      const link = node("a", "ask-next");
-      link.href = "/index.html#teach";
-      link.textContent = "Teach the next lesson";
-      line.append(link, " from the course home page.");
-      const footer = main.querySelector("footer");
-      if (footer) footer.before(line);
-      else main.append(line);
-    }).catch(() => {});
+  // The row at the top right that theme.js also puts its switch in, whichever script gets there first.
+  function topBar() {
+    let bar = document.querySelector(".top-bar");
+    if (!bar) {
+      bar = node("div", "top-bar");
+      document.body.prepend(bar);
+    }
+    return bar;
   }
 
-  function startTeach(box, action) {
+  function setTeachOpen(open) {
+    teach.panel.hidden = !open;
+    teach.toggle.setAttribute("aria-expanded", String(open));
+    if (open) teach.panel.focus();
+  }
+
+  function startTeach(action) {
     post("/api/teach", { action })
       .then((r) => r.json().catch(() => ({})).then((d) => (r.ok ? d : Promise.reject(new Error(d.error || "the server answered " + r.status)))))
-      .then(({ job }) => renderTeach(box, job))
+      .then(({ job }) => renderTeach(job))
       .catch(async (err) => {
         try {
-          const info = await getJSON("/api/teach");
-          renderTeach(box, info.job);
+          renderTeach((await getJSON("/api/teach")).job);
         } catch (_) { /* Keep the start error visible if the status request also fails. */ }
-        const line = node("p", "ask-error");
-        line.textContent = "Could not start: " + err.message;
-        box.querySelector(".ask-teach-status").prepend(line);
+        teach.panel.prepend(Object.assign(node("p", "ask-error"), { textContent: "Could not start: " + err.message }));
       });
   }
 
-  function pollTeach(box) {
+  function pollTeach() {
     clearTimeout(teachTimer);
-    getJSON("/api/teach").then(({ job }) => renderTeach(box, job))
-      .catch(() => { teachTimer = setTimeout(() => pollTeach(box), 4000); });
+    getJSON("/api/teach").then(({ job }) => renderTeach(job))
+      .catch(() => { teachTimer = setTimeout(pollTeach, 4000); });
   }
 
-  function renderTeach(box, job) {
+  function minutes(since) {
+    const m = Math.round((Date.now() - new Date(since)) / 60000);
+    return m >= 1 ? `${m} min` : "just now";
+  }
+
+  function textLine(cls, text) {
+    return Object.assign(node("p", cls), { textContent: text });
+  }
+
+  function renderTeach(job) {
+    const { toggle, panel } = teach;
     const running = Boolean(job && job.state === "running");
-    box.querySelectorAll(".ask-teach-actions button").forEach((b) => { b.disabled = running; });
-    const status = box.querySelector(".ask-teach-status");
-    status.replaceChildren();
-    if (!job) return;
-    const when = new Date(job.started).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const state = node("p", "ask-teach-state");
-    state.textContent = `${TEACH_LABEL[job.action]}: ${job.state} (started ${when})`
-      + (job.cost_usd != null ? ` · ≈$${Number(job.cost_usd).toFixed(2)}` : "");
-    status.append(state);
-    if (job.lines.length) {
-      const log = node("ol", "ask-teach-log");
-      for (const text of job.lines.slice(running ? -6 : -3)) log.append(Object.assign(node("li"), { textContent: text }));
-      status.append(log);
-    }
+    clearTimeout(teachTimer); // a start from this page renders without pollTeach, so one may be waiting
+    toggle.classList.toggle("running", running);
+    toggle.textContent = running ? `Teaching · ${minutes(job.started)}` : "Teach";
+    panel.replaceChildren(textLine("ask-teach-title", "Teaching"));
     if (running) {
-      status.append(button("Stop", () => post("/api/teach/stop", {}).then(() => pollTeach(box)).catch(() => {})));
-      clearTimeout(teachTimer); // a start from this page renders without pollTeach, so one may be waiting
-      teachTimer = setTimeout(() => pollTeach(box), 2000);
+      const now = node("p", "ask-teach-now");
+      now.append(Object.assign(node("span", "ask-teach-live"), { textContent: TEACH_DOING[job.action] }),
+        Object.assign(node("span", "ask-teach-time"), { textContent: minutes(job.started) }));
+      panel.append(now, textLine("ask-teach-step", job.lines.length ? job.lines[job.lines.length - 1] : "Starting…"));
+      if (job.lines.length > 1) {
+        const log = node("details", "ask-teach-log");
+        const list = node("ol");
+        for (const text of job.lines.slice(-8, -1).reverse()) list.append(Object.assign(node("li"), { textContent: text }));
+        log.append(Object.assign(node("summary"), { textContent: "Earlier steps" }), list);
+        panel.append(log);
+      }
+      const stop = button("Stop", () => post("/api/teach/stop", {}).then(pollTeach).catch(() => {}));
+      stop.className = "ask-teach-stop";
+      panel.append(stop);
+      teachTimer = setTimeout(pollTeach, 2000);
       return;
     }
-    if (job.summary.trim()) {
-      const summary = node("div", "ask-teach-summary");
-      summary.innerHTML = md(job.summary.trim());
-      status.append(summary);
+    if (job) {
+      const ended = node("p", "ask-teach-now");
+      ended.append(Object.assign(node("span", `ask-teach-ended ${job.state}`), { textContent: `${TEACH_LABEL[job.action]}: ${TEACH_ENDED[job.state] || job.state}` }),
+        Object.assign(node("span", "ask-teach-time"), { textContent: job.cost_usd != null ? `≈$${Number(job.cost_usd).toFixed(2)}` : "" }));
+      panel.append(ended);
+      if (job.summary.trim()) {
+        const summary = node("div", "ask-teach-summary");
+        summary.innerHTML = md(job.summary.trim());
+        panel.append(summary);
+      }
+      if (job.error) panel.append(textLine("ask-error", job.error));
+      if (job.check) {
+        const passed = job.check.ok === true;
+        panel.append(textLine(`ask-teach-verdict ${passed ? "ok" : "no"}`, passed ? "The course check passed."
+          : job.check.ok === false ? "The course check found problems:" : "The course check did not run."));
+        if (!passed) panel.append(Object.assign(node("pre", "ask-teach-check"), { textContent: job.check.text }));
+      }
+      const after = node("p", "ask-teach-after");
+      if (job.check && job.check.ok === false) after.append(button("Ask Claude to fix these", () => startTeach("fix")));
+      if (job.state === "done") after.append(Object.assign(node("a"), { href: location.href.split("#")[0], textContent: "Reload to see the changes" }));
+      if (after.children.length) panel.append(after);
+    } else {
+      panel.append(textLine("ask-teach-note", "Runs a session with Claude (Opus) in this course's folder. "
+        + "It takes 5 to 15 minutes and carries on if you close the page."));
     }
-    if (job.error) status.append(Object.assign(node("p", "ask-error"), { textContent: job.error }));
-    if (job.check) {
-      const check = node("pre", "ask-teach-check");
-      check.textContent = job.check.text;
-      status.append(check);
-      if (job.check.ok === false) status.append(button("Ask Claude to fix these", () => startTeach(box, "fix")));
+    const actions = node("div", "ask-teach-actions");
+    for (const action of ["next", "update", ...(teach.refresh ? ["refresh"] : [])]) {
+      actions.append(button(TEACH_LABEL[action], () => startTeach(action)));
     }
-    if (job.state === "done") {
-      const reload = node("a");
-      reload.href = location.href;
-      reload.textContent = "Reload to see the changes";
-      status.append(reload);
-    }
+    panel.append(actions);
   }
 
   // Where cards go: the right margin on wide screens, under the paragraph otherwise.

@@ -37,9 +37,9 @@ body {
 }
 main { max-width: 40rem; margin: 0 auto; padding: 3.5rem 1.25rem 5rem; }
 
-/* Light or dark switch (theme.js), top right of every page */
+/* Top right of every page: the light or dark switch (theme.js), and Teach beside it when ask.js is serving */
+.top-bar { position: absolute; top: 1rem; right: 1.25rem; z-index: 5; display: flex; align-items: baseline; gap: 1.2rem; }
 .theme-toggle {
-  position: absolute; top: 1rem; right: 1.25rem; z-index: 5;
   font: inherit; font-size: 0.78rem; color: var(--muted); background: none; border: 0; padding: 0.2rem 0; cursor: pointer;
 }
 .theme-toggle:hover, .theme-toggle:focus-visible { color: var(--ink); }
@@ -187,7 +187,7 @@ figure.diagram figcaption { font-size: 0.85rem; color: var(--muted); margin-top:
 
 @media print {
   :root, :root[data-theme] { color-scheme: light; --bg: #fff; --ink: #000; }
-  nav.course, .quiz button.act, .quiz .marks, .theme-toggle { display: none; }
+  nav.course, .quiz button.act, .quiz .marks, .top-bar { display: none; }
   .quiz .model, .quiz .fb { display: block; }
   main { max-width: none; padding: 0; }
 }

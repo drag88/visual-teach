@@ -24,7 +24,7 @@ main > .ask-flash { animation: ask-flash 1.4s ease-out; }
 /* Hint shown when the lesson is opened without the server */
 .ask-review-later { color: var(--muted); font-size: 0.9rem; }
 .ask-hint { font-family: var(--sans); font-size: 0.72rem; color: var(--muted); margin: 3rem 0 0; text-align: center; }
-@media print { .ask-hint, .ask-bar, .ask-sel, .ask-panel, .ask-teach { display: none !important; } }
+@media print { .ask-hint, .ask-bar, .ask-sel, .ask-panel, .ask-teach, .ask-teach-toggle { display: none !important; } }
 
 /* Bar that appears over a highlight */
 .ask-sel {
@@ -120,23 +120,63 @@ body.ask-hidden main > .has-ask::after { display: none; }
 }
 .ask-show:hover, .ask-show:focus-visible { color: var(--ink); }
 
-/* Teaching from the course home page (ask.js showTeach) */
-.ask-teach { margin: 3rem 0 0; padding-top: 0.4rem; border-top: 1px solid var(--rule); }
-.ask-teach-note { color: var(--muted); font-size: 0.88rem; }
-.ask-teach-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 1rem; }
-.ask-teach button {
-  font: inherit; font-size: 0.9rem; color: var(--ink); background: transparent;
-  border: 1px solid var(--rule); border-radius: 2px; padding: 0.5rem 0.8rem; cursor: pointer;
+/* Teaching (ask.js showTeach): Teach beside the light/dark switch opens a panel under it */
+.ask-teach-toggle {
+  font: inherit; font-size: 0.78rem; color: var(--muted); background: none; border: 0; padding: 0.2rem 0; cursor: pointer;
 }
-.ask-teach button:hover:not(:disabled) { border-color: var(--muted); }
-.ask-teach button:disabled { color: var(--muted); cursor: default; }
-.ask-teach-state { font-size: 0.85rem; color: var(--muted); margin: 0 0 0.4rem; }
-.ask-teach-log { list-style: none; padding: 0; margin: 0 0 0.8rem; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
-.ask-teach-log li { margin: 0; overflow-wrap: anywhere; }
-.ask-teach-summary { font-size: 0.92rem; }
-.ask-teach-check { font-size: 0.75rem; margin: 0.6rem 0; }
-
-.ask-next-line { color: var(--muted); font-size: 0.9rem; margin: 2.5rem 0 0; }
+.ask-teach-toggle:hover, .ask-teach-toggle:focus-visible, .ask-teach-toggle[aria-expanded="true"] { color: var(--ink); }
+.ask-teach-toggle.running { color: var(--accent); }
+/* A slow pulse says the job is alive, at the top right of every page and beside its name in the panel. */
+.ask-teach-toggle.running::before, .ask-teach-live::before {
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 0.45rem; border-radius: 50%;
+  background: var(--accent); vertical-align: 0.1em; animation: ask-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ask-pulse { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .ask-teach-toggle.running::before, .ask-teach-live::before { animation: none; } }
+.ask-teach {
+  position: absolute; top: calc(100% + 0.5rem); right: 0; width: min(23rem, calc(100vw - 2.5rem));
+  max-height: calc(100vh - 5rem); overflow-y: auto;
+  background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 0.9rem 1rem 0.5rem;
+  font-size: 0.82rem; line-height: 1.5;
+}
+.ask-teach:focus { outline: none; }
+.ask-teach p { margin: 0; }
+.ask-teach .ask-teach-title { font-weight: 600; margin-bottom: 0.5rem; }
+.ask-teach .ask-teach-note { color: var(--muted); margin-bottom: 0.7rem; }
+.ask-teach-now { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.ask-teach-time { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
+.ask-teach-step, .ask-teach-log li { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ask-teach .ask-teach-step { margin-top: 0.15rem; }
+.ask-teach-log { margin: 0.6rem 0 0; }
+.ask-teach-log summary { color: var(--muted); font-size: 0.75rem; cursor: pointer; }
+.ask-teach-log ol { list-style: none; margin: 0.35rem 0 0; padding: 0; font-size: 0.75rem; }
+.ask-teach-log li { margin: 0 0 0.15rem; }
+.ask-teach-ended.failed { color: var(--bad); }
+.ask-teach-summary { margin: 0.6rem 0 0; }
+.ask-teach-summary p, .ask-teach-summary ul, .ask-teach-summary ol { margin: 0 0 0.4rem; }
+.ask-teach-summary ul, .ask-teach-summary ol { padding-left: 1.1rem; }
+.ask-teach-summary li { margin: 0 0 0.2rem; }
+.ask-teach .ask-teach-verdict { margin-top: 0.6rem; }
+.ask-teach-verdict.ok { color: var(--good); }
+.ask-teach-verdict.no { color: var(--bad); }
+.ask-teach-check {
+  font-size: 0.7rem; margin: 0.4rem 0 0; padding: 0.5rem 0.6rem; background: var(--code-bg);
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 10rem; overflow-y: auto;
+}
+.ask-teach .ask-teach-after { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1rem; margin-top: 0.7rem; }
+.ask-teach-after button, .ask-teach-stop {
+  font: inherit; color: var(--ink); background: none; border: 1px solid var(--rule); border-radius: 2px;
+  padding: 0.3rem 0.7rem; cursor: pointer;
+}
+.ask-teach-after button:hover, .ask-teach-stop:hover { border-color: var(--muted); }
+.ask-teach-stop { display: block; margin: 0.7rem 0 0.4rem; }
+.ask-teach-actions { margin-top: 0.8rem; }
+.ask-teach-actions button {
+  display: block; width: 100%; text-align: left; font: inherit; color: var(--ink); background: none;
+  border: 0; border-top: 1px solid var(--rule); padding: 0.55rem 0; cursor: pointer;
+}
+.ask-teach-actions button:hover, .ask-teach-actions button:focus-visible { color: var(--accent); }
+.ask-teach .ask-error { color: var(--bad); margin-bottom: 0.5rem; }
 
 /* Ask about the whole lesson */
 body.ask-on { padding-bottom: 5rem; }

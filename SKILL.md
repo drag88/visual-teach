@@ -21,7 +21,7 @@ Teach a topic as a course of short, visual lessons the learner reads in the brow
 - Claude Code: `/visual-teach <topic>` starts a course. `/visual-teach continue ~/learn/<course>` carries one on. It works from any folder.
 - Codex: `$visual-teach <topic>`, or pick it from `/skills`.
 - Just to read and ask, with no new lesson: `/visual-teach open ~/learn/<course>`. Run `python3 <this skill>/scripts/open_course.py <course>` with any page or flags the learner gave (on Windows, `python` or `py` in place of `python3`), pass on the link it prints, and stop: no teaching session. `--stop` stops the reading server. Point learners to this command rather than a script path: a plugin install moves the skill to a new folder with each update.
-- From the course page itself: the course home page has a Teaching section, shown only on the computer running the server (section 8).
+- From the course pages themselves: Teach, at the top right beside the light/dark switch, shown only on the computer running the server (section 8).
 
 ## Every session
 
@@ -130,10 +130,10 @@ Then append `{"role":"meta","event":"handled","thread":"...","ref":"<what you ma
 
 ## 8. Teaching from the course page
 
-The course home page has three buttons, so a learner rarely needs the terminal once the server is running:
-- **Teach the next lesson** and **Update lessons from my questions** run one teaching session in the background, guided by this file. It can read the skill, the course and its source folder. It can edit only inside the course folder. It cannot edit `course.json`, `.serve.json`, `.claude/`, `CLAUDE.md`, `AGENTS.md` or the shared asset files. It can edit `assets/course.css`. It has no shell. The server syncs the shared files first and runs the course check afterwards. The page shows the latest steps, a Stop button, a closing summary and the check result. When the check fails, the fix button runs one more session with the problems.
+Teach, at the top right of every course page beside the light/dark switch, opens a small panel with three actions, so a learner rarely needs the terminal once the server is running. While a job runs, Teach shows how long it has been going, on every page:
+- **Teach the next lesson** and **Update lessons from my questions** run one teaching session in the background, guided by this file. It can read the skill, the course and its source folder. It can edit only inside the course folder. It cannot edit `course.json`, `.serve.json`, `.claude/`, `CLAUDE.md`, `AGENTS.md` or the shared asset files. It can edit `assets/course.css`. It has no shell. The server syncs the shared files first and runs the course check afterwards. The panel shows the current step (earlier ones fold away), a Stop button, a closing summary and the check result. When the check fails, the fix button runs one more session with the problems.
 - **Refresh the source copy** appears when `course.json` has a `refresh` key. This shell command brings a copied source folder up to date. Only a person writes it. It runs from the home folder. It must not run anything inside the course folder, which teaching sessions can edit. It should finish its work before it exits: on Windows, a background process it leaves running is not stopped with the job.
-- One job runs at a time. The buttons only appear, and the server only accepts them, on the computer running the server, never through the phone link. Each teaching session takes about 5 to 15 minutes.
+- One job runs at a time. Teach only appears, and the server only accepts its actions, on the computer running the server, never through the phone link. Each teaching session takes about 5 to 15 minutes.
 
 A session started this way follows sections 1 to 7 as usual, except that it runs no scripts and takes no screenshots.
 Served course pages run only the skill's three shared scripts: `theme.js`, `quiz.js` and `ask.js`. A script written into a lesson never runs.

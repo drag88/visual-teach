@@ -375,6 +375,14 @@ class ServeTest(unittest.TestCase):
         self.ask(thread="t-connect", question="Explain it again", selection=None, para=None)
         self.assertIn('connecting it to "Tools"', self.calls()[-1]["stdin"])
 
+    def test_step_lines_stay_short(self):
+        # Steps show in a narrow panel: the skill's files by name, long search patterns cut.
+        course = self.server.course
+        skill_file = {"name": "Read", "input": {"file_path": str(serve.SKILL / "vendor" / "teach" / "GLOSSARY-FORMAT.md")}}
+        self.assertEqual(course.describe(skill_file), "Reading the skill's GLOSSARY-FORMAT.md")
+        long = course.describe({"name": "Grep", "input": {"pattern": "^(async )?def (match|compute|score|rank|pick)_[a-z]+"}})
+        self.assertEqual(long, 'Searching for "^(async )?def (match|compute|score|rank…"')
+
     def test_failure_words(self):
         ok = {"returncode": 0, "stderr": "", "error": None}
         self.assertIsNone(serve.failure(ok))

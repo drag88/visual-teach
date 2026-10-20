@@ -74,9 +74,9 @@ Quizzes ask you to tap a diagram, choose an answer, recall an idea or predict wh
 
 ### Teach from the page
 
-The course home page can teach the next lesson or update lessons from your questions. You can follow a teaching session's progress and stop it on the course home page.
+Teach, at the top right of every page, writes the next lesson or updates lessons from your questions. While a session runs, Teach shows how long it has been going, and its panel shows the current step and a Stop button.
 
-<img src="docs/images/teach.png" width="100%" alt="Teaching controls on the course home page">
+<img src="docs/images/teach.png" width="100%" alt="The Teach panel at the top right of a course page, showing a teaching session in progress">
 
 - Missed questions return for spaced review after 1, 3 and 7 days.
 - Every page supports light and dark, including on a phone.
