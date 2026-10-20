@@ -438,6 +438,8 @@ class ServeTest(unittest.TestCase):
     def test_static_files_and_ping(self):
         resp, data = self.request("GET", "/lessons/one.html")
         self.assertEqual(resp.status, 200)
+        # A browser must check before reusing a course file, or after an update it can mix old scripts with new styles.
+        self.assertEqual(resp.getheader("Cache-Control"), "no-cache")
         self.assertIn("hands out jobs", data)
         resp, data = self.request("GET", "/api/ping")
         info = json.loads(data)

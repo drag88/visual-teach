@@ -751,6 +751,7 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         self.course_html = real.is_file() and real.suffix.lower() == ".html" or (
             real.is_dir() and urlparse(self.path).path.endswith("/"))
+        self.course_file = True
         return super().send_head()
 
     def end_headers(self):
@@ -758,6 +759,10 @@ class Handler(SimpleHTTPRequestHandler):
             host = self.headers.get("Host")
             scripts = " ".join(f"http://{host}/assets/{name}.js" for name in ("theme", "quiz", "ask"))
             self.send_header("Content-Security-Policy", f"script-src {scripts}; object-src 'none'; base-uri 'none'")
+        if getattr(self, "course_file", False):
+            # Check before reusing a stored copy: a sync replaces scripts and styles together, and a browser that
+            # guessed from the file date could pair old scripts with new styles. An unchanged file is a quick 304.
+            self.send_header("Cache-Control", "no-cache")
         if getattr(self, "set_cookie", False):
             self.send_header("Set-Cookie", f"{COOKIE}={self.server.token}; Path=/; HttpOnly; SameSite=Strict")
         super().end_headers()
