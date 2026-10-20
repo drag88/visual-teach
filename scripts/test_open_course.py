@@ -238,6 +238,17 @@ class SyncParseTest(unittest.TestCase):
         self.assertEqual(html.count("assets/quiz.js"), 1, "a > inside a quoted attribute is still one tag")
         shutil.rmtree(ws)
 
+    def test_the_tag_type_counts_and_a_broken_url_does_not_stop_sync(self):
+        import sync_course
+        ws = Path(tempfile.mkdtemp())
+        (ws / "lessons").mkdir()
+        page = ws / "lessons" / "four.html"
+        page.write_text('<html><head><link rel="stylesheet" href="../assets/ask.js"></head><body><main></main>'
+                        '<script src="https://[broken/vendor.js"></script></body></html>')
+        sync_course.link_assets(page, ws)  # must not raise
+        self.assertIn('<script src="../assets/ask.js"></script>', page.read_text(), "a link tag does not run a script")
+        shutil.rmtree(ws)
+
 
 class LanSettingTest(StubbedOpen):
     def test_no_lan_turns_the_phone_link_off(self):

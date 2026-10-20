@@ -14,7 +14,6 @@ import shutil
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlsplit
 
 SKILL = Path(__file__).resolve().parent.parent
 SHARED = ["style.css", "theme.js", "quiz.js", "ask.css", "ask.js"]
@@ -42,9 +41,15 @@ def drifted(ws):
             or (ws / "assets" / n).read_bytes() != (src / n).read_bytes()]
 
 
+def bare(url):
+    """The path part of a URL, without a query string or fragment. Plain string work: a malformed URL elsewhere
+    on the page must not stop the sync."""
+    return url.split("#", 1)[0].split("?", 1)[0]
+
+
 class Loaded(HTMLParser):
-    """The paths a page really loads: each script's src and each stylesheet link's href, without query strings.
-    Read as HTML, so a comment, a data-src or a preload link loads nothing, however the tag is written."""
+    """What a page really loads, as (tag, path): each script's src and each stylesheet link's href. Read as HTML, so
+    a comment, a data-src or a preload link loads nothing, however the tag is written."""
 
     def __init__(self, html):
         super().__init__()
@@ -55,9 +60,9 @@ class Loaded(HTMLParser):
     def handle_starttag(self, tag, attrs):
         a = {k: v or "" for k, v in attrs}
         if tag == "script" and a.get("src"):
-            self.paths.add(urlsplit(a["src"]).path)
+            self.paths.add(("script", bare(a["src"])))
         elif tag == "link" and "stylesheet" in a.get("rel", "").lower().split() and a.get("href"):
-            self.paths.add(urlsplit(a["href"]).path)
+            self.paths.add(("link", bare(a["href"])))
 
 
 def link_assets(page, ws):
@@ -66,13 +71,14 @@ def link_assets(page, ws):
     original = html
     loaded = Loaded(html).paths
     sheets = ["style.css", "ask.css"] + (["course.css"] if (ws / "assets" / "course.css").exists() else [])
-    tags = [(s, f'<link rel="stylesheet" href="{prefix}assets/{s}">') for s in sheets]
-    tags.append(("theme.js", f'<script src="{prefix}assets/theme.js"></script>'))  # in <head>, so the theme is set before paint
-    missing = [tag for name, tag in tags if f"{prefix}assets/{name}" not in loaded]
+    tags = [(("link", f"{prefix}assets/{s}"), f'<link rel="stylesheet" href="{prefix}assets/{s}">') for s in sheets]
+    # theme.js goes in <head>, so the theme is set before paint
+    tags.append((("script", f"{prefix}assets/theme.js"), f'<script src="{prefix}assets/theme.js"></script>'))
+    missing = [tag for need, tag in tags if need not in loaded]
     if missing:
         html = html.replace("</head>", "\n".join(missing) + "\n</head>", 1)
-    scripts = [(s, f'<script src="{prefix}assets/{s}"></script>') for s in ("quiz.js", "ask.js")]
-    missing = [tag for name, tag in scripts if f"{prefix}assets/{name}" not in loaded]
+    scripts = [(("script", f"{prefix}assets/{s}"), f'<script src="{prefix}assets/{s}"></script>') for s in ("quiz.js", "ask.js")]
+    missing = [tag for need, tag in scripts if need not in loaded]
     if missing:
         html = re.sub(r"</body>", "\n".join(missing) + "\n</body>", html, count=1)
     if html != original:
