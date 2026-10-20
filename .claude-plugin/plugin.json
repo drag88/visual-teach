@@ -1,10 +1,19 @@
 {
   "name": "visual-teach",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Learn any topic, or any codebase, as short visual lessons in your browser. Highlight anything and Claude answers beside it.",
-  "author": { "name": "drag88", "url": "https://github.com/drag88" },
+  "author": {
+    "name": "drag88",
+    "url": "https://github.com/drag88"
+  },
   "homepage": "https://github.com/drag88/visual-teach",
   "repository": "https://github.com/drag88/visual-teach",
   "license": "MIT",
-  "keywords": ["learning", "teaching", "lessons", "diagrams", "quizzes"]
+  "keywords": [
+    "learning",
+    "teaching",
+    "lessons",
+    "diagrams",
+    "quizzes"
+  ]
 }

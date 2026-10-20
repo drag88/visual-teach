@@ -2,6 +2,29 @@
 
 Notable changes to visual-teach. Versions follow [semantic versioning](https://semver.org): new features raise the middle number, fixes the last one. `.claude-plugin/plugin.json` carries the same version, and Claude Code installs with auto-update get a release when that number changes.
 
+## [1.2.0] - 2026-10-20
+
+### Added
+
+- Try again after a missed multiple-choice or tap-the-diagram question. A retry is practice: the score still counts first tries, and review keeps the miss.
+- A missed multiple-choice or tap-the-diagram question names the right answer in words at the start of its feedback, as well as marking it.
+- The course home page says when missed questions are waiting to come back for review.
+- `--no-lan` turns a course's phone link off again.
+
+### Fixed
+
+- The course check reports a quiz it cannot answer in one line, instead of crashing with a long error that "Ask Claude to fix these" would then send on.
+- A Connect card brought back after a reload shows the topic asked about, not the instruction sent to Claude.
+- A question whose answer never arrived comes back saying so, instead of as an empty card, and a follow-up to it carries the original question, the highlighted passage and, for Connect, the topic.
+- A stopped answer or teaching job says it was stopped, instead of showing an exit code.
+- Teaching sessions started from the page know they cannot search the web, and say so instead of writing facts they could not check.
+- Syncing a course reads each page's tags as HTML, so it no longer adds a second copy of a tag written another way, which made the theme switch appear twice, and no longer counts a comment, a `data-src` or a preload link as loading a file.
+- A port already in use by another course's phone link no longer stops a second course from starting.
+- The follow-up box waits until the first answer has started.
+- Diagram parts show clear keyboard focus.
+- Lesson writing rules: in a sequence diagram, a tap on an actor's line counts as the actor, and no label may point a tap-the-diagram question at the wrong part.
+- The server says "On this computer" instead of "On this Mac".
+
 ## [1.1.0] - 2026-10-20
 
 ### Added
@@ -18,7 +41,7 @@ Notable changes to visual-teach. Versions follow [semantic versioning](https://s
 
 - The opener no longer reports a new server as started while the previous one is still shutting down.
 - Teaching from the course page refuses to run once the skill folder its server started from has been removed, instead of running without its edit guard and checks.
-- Syncing a course replaces a shared file that is a link to somewhere else, instead of overwriting the file it points to.
+- Syncing a course replaces a shared file that is a link to somewhere else, even one with the same contents, instead of overwriting the file it points to.
 - With `--lan`, the link opened on this computer carries the token the server asks for, instead of getting a 401 error.
 
 ## [1.0.0] - 2026-10-19
@@ -33,5 +56,6 @@ First public release.
 - Light and dark themes, a phone layout, and a phone link with `--lan`.
 - Windows process and path handling.
 
+[1.2.0]: https://github.com/drag88/visual-teach/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/drag88/visual-teach/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/drag88/visual-teach/releases/tag/v1.0.0
