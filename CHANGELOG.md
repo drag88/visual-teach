@@ -2,6 +2,23 @@
 
 Notable changes to visual-teach. Versions follow [semantic versioning](https://semver.org): new features raise the middle number, fixes the last one. `.claude-plugin/plugin.json` carries the same version, and Claude Code installs with auto-update get a release when that number changes.
 
+## [1.4.0] - 2026-10-22
+
+### Changed
+
+- The teaching rules ask for plain words and whole ideas: every idea the lesson teaches comes with its reason, its consequence and its limit, real terms are named as they are explained, and a lesson explains an adult's subject rather than writing for a child.
+- Everyday comparisons are optional. A course uses one only after the real thing is named, only when it explains a behaviour the plain words did not, and drops it when it only renames the parts or a learner asks what it means. Live answers follow the same rule and keep the reasoning when asked for something simpler.
+- The lesson's shape follows the subject: the hero can be a diagram, a table, a worked example or a quoted passage, lesson 1 is the map only for a topic that is a system of parts, and a diagram quiz is asked only when there is a diagram. Every lesson has at least one practice item on a case the lesson did not show.
+- A made-up example is fine when the lesson says it is made up and it would really work that way.
+
+### Added
+
+- A learning library at `~/learn/index.html`, rebuilt each time a course in `~/learn` is opened: every course, its lessons and their status, its reference sheets, carry-over rules and glossary terms, and what the learner has shown they know (learning records, retired questions and questions due for review).
+
+### Fixed
+
+- The course check counted a sentence that ends in a closing quote together with the next one, so a lesson quoting a source could fail the 25-word rule. It also skips quoted passages inside a `<blockquote>`.
+
 ## [1.3.1] - 2026-10-20
 
 ### Fixed
@@ -77,6 +94,7 @@ First public release.
 - Light and dark themes, a phone layout, and a phone link with `--lan`.
 - Windows process and path handling.
 
+[1.4.0]: https://github.com/drag88/visual-teach/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/drag88/visual-teach/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/drag88/visual-teach/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/drag88/visual-teach/compare/v1.2.0...v1.2.1
