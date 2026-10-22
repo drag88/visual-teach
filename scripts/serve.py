@@ -42,7 +42,7 @@ TIERS = {"quick": ("sonnet", "low"), "deep": ("opus", "high")}
 ALWAYS_QUICK = {"explain", "simpler", "more"}
 KIND_TASK = {
     "explain": "Explain the highlighted words in about two sentences.",
-    "simpler": "Explain the highlighted passage again, more simply, in about three sentences.",
+    "simpler": "Explain the highlighted passage again in plainer words and smaller steps, in about three sentences, keeping the reason.",
     "more": "Say more about the highlighted passage in about six sentences, with one concrete example.",
     "connect": "Explain how the highlighted idea connects to the topic named below, in under 150 words. "
                "If a lesson in this course covers that topic, name it.",

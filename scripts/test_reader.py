@@ -105,7 +105,7 @@ def run(width_name, width, base, shots):
         if pg.locator(".ask-cite").count():
             problems.append(f"{width_name}: citations became buttons without a source folder")
 
-        select_words(pg, para, "explains the diagram")
+        select_words(pg, para, "walks the hero")
         pg.wait_for_selector(".ask-sel:not([hidden])")
         if pg.locator(".ask-sel button:visible", has_text="Where else").count() or pg.locator(".ask-sel button:visible", has_text="Walk through").count():
             problems.append(f"{width_name}: Where else or Walk through offered on prose without a source folder")
@@ -220,7 +220,7 @@ def check_sources(width_name, width, base, ws, log, shots):
         quiz_p = pg.evaluate("document.querySelector('#q-greet').dataset.p")
         cited = "[...document.querySelectorAll('.ask-panel[open] .ask-line.cited')].map((l) => +l.dataset.n)"
 
-        select_words(pg, "main > h2 + p", "explains the diagram")
+        select_words(pg, "main > h2 + p", "walks the hero")
         pg.wait_for_selector(".ask-sel:not([hidden])")
         if pg.locator(".ask-sel button:visible", has_text="Walk through").count():
             problems.append(f"{width_name}: Walk through offered on prose")
@@ -359,7 +359,7 @@ def check_sources(width_name, width, base, ws, log, shots):
                 problems.append(f"{width_name}: widening the window moved a panel answer behind the panel")
             pg.set_viewport_size({"width": width, "height": 900})
         pg.locator(".ask-panel-head button", has_text="Close").click()
-        select_words(pg, "main > h2 + p", "explains")
+        select_words(pg, "main > h2 + p", "walks")
         pg.wait_for_selector(".ask-sel:not([hidden])")
         pg.locator(".ask-sel button", has_text="Connect").click()
         field = pg.evaluate("[document.activeElement.tagName, document.activeElement.getAttribute('list')]")
