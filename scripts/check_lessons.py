@@ -38,10 +38,11 @@ def long_sentences(pg):
     """Sentences in the lesson's prose, captions and quizzes that run past the plain-English limit."""
     text = pg.evaluate(
         """() => [...document.querySelectorAll("main p, main li, main figcaption, main td, .quiz .q, .quiz .fb, .quiz .model")]
-          .filter((el) => !el.closest("pre, nav, footer, .read"))
-          .map((el) => el.innerText).join("\\n")"""
+          .filter((el) => !el.closest("pre, nav, footer, .read, blockquote"))
+          .map((el) => [...el.querySelectorAll("blockquote")].reduce((t, b) => t.replace(b.innerText, ""), el.innerText))
+          .join("\\n")"""
     )
-    sentences = re.split(r"(?<=[.!?])\s+|\n", text)
+    sentences = re.split(r"(?<=[.!?])[\"”’')\]]*\s+|\n", text)  # a closing quote or bracket may follow the full stop
     return [s.strip() for s in sentences if len(s.split()) > MAX_SENTENCE_WORDS]
 
 
