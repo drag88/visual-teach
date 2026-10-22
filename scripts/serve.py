@@ -146,17 +146,7 @@ class Course:
     def records(self, log=None):
         with self.lock:
             text = read_text(log or self.log)
-        out = []
-        for line in text.split("\n"):  # not splitlines(): answers may hold U+2028 and friends
-            if not line.strip():
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(rec, dict):
-                out.append(rec)
-        return out
+        return records_in(text)
 
     def threads(self, lesson=None):
         by_thread, deleted = {}, set()
@@ -652,32 +642,58 @@ class Course:
 
     def review(self):
         """Questions the learner has missed and not yet got right three times running, due ones soonest first."""
-        items = {}
-        for r in self.records(self.quiz_log):
-            key = (r.get("lesson"), r.get("quiz"))
-            if not isinstance(r.get("right"), bool) or not all(isinstance(k, str) for k in key):
-                continue  # null is a reveal with no self-mark yet, so it says nothing about memory
-            item = items.setdefault(key, {"streak": 0, "missed": False})
-            item.update(t=r.get("t"), q=r.get("q"))
-            if r["right"]:
-                item["streak"] += 1
-            else:
-                item.update(streak=0, missed=True)
-        due, waiting, at_now = [], 0, datetime.now(timezone.utc)
-        for (lesson, quiz), item in items.items():
-            if not item["missed"] or item["streak"] >= len(REVIEW_DAYS):
-                continue
-            try:
-                at = datetime.fromisoformat(item["t"]).astimezone() + timedelta(days=REVIEW_DAYS[item["streak"]])
-            except (TypeError, ValueError):
-                continue
-            if at > at_now:
-                waiting += 1
-            else:
-                due.append((at, {"lesson": lesson, "quiz": quiz, "q": item["q"], "href": f"{lesson}#{quiz}",
-                                 "streak": item["streak"]}))
-        due.sort(key=lambda d: d[0])
-        return {"due": [d for _, d in due], "waiting": waiting}
+        due, waiting, _ = review_of(self.records(self.quiz_log))
+        return {"due": due, "waiting": waiting}
+
+
+def records_in(text):
+    """The records in a jsonl text: one JSON object per line, anything else skipped."""
+    out = []
+    for line in text.split("\n"):  # not splitlines(): answers may hold U+2028 and friends
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
+
+
+def review_of(records):
+    """(due, waiting, retired) for the quiz records of a course. A missed question comes back REVIEW_DAYS after its
+    last answer, by rights in a row since the miss, and the third right retires it. Due ones come soonest first.
+    The library page reads this too, so the rule lives in one place."""
+    items = {}
+    for r in records:
+        key = (r.get("lesson"), r.get("quiz"))
+        if not isinstance(r.get("right"), bool) or not all(isinstance(k, str) for k in key):
+            continue  # null is a reveal with no self-mark yet, so it says nothing about memory
+        item = items.setdefault(key, {"streak": 0, "missed": False})
+        item.update(t=r.get("t"), q=r.get("q"))
+        if r["right"]:
+            item["streak"] += 1
+        else:
+            item.update(streak=0, missed=True)
+    due, waiting, retired, at_now = [], 0, [], datetime.now(timezone.utc)
+    for (lesson, quiz), item in items.items():
+        if not item["missed"]:
+            continue
+        entry = {"lesson": lesson, "quiz": quiz, "q": item["q"], "href": f"{lesson}#{quiz}", "streak": item["streak"]}
+        if item["streak"] >= len(REVIEW_DAYS):
+            retired.append(entry)
+            continue
+        try:
+            at = datetime.fromisoformat(item["t"]).astimezone() + timedelta(days=REVIEW_DAYS[item["streak"]])
+        except (TypeError, ValueError):
+            continue
+        if at > at_now:
+            waiting += 1
+        else:
+            due.append((at, entry))
+    due.sort(key=lambda d: d[0])
+    return [d for _, d in due], waiting, retired
 
 
 def stop_all(course):

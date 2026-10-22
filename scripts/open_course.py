@@ -198,6 +198,19 @@ def refresh(ws):
         print("Updated the course's shared files:", ", ".join(changed))
 
 
+def update_library(ws):
+    """Rebuild the learning library in the course's parent folder, but only in ~/learn or where the library already
+    is, so a course kept anywhere else never gets an index.html written beside it. A failure costs only the library."""
+    try:
+        import library  # here, so even a broken library.py cannot stop the open
+        page = ws.parent / "index.html"
+        if ws.parent == (Path.home() / "learn").resolve() or (
+                page.is_file() and library.MARKER in page.read_text(encoding="utf-8", errors="replace")):
+            library.write(ws.parent)
+    except Exception as exc:
+        print(f"Could not update the learning library: {exc}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Start or reuse a course's reading server and open a page.")
     ap.add_argument("workspace")
@@ -255,6 +268,7 @@ def main():
             tail = (ws / ".serve.log").read_text(encoding="utf-8", errors="replace")[-1500:] if (ws / ".serve.log").exists() else ""
             sys.exit(f"The course server did not start. Last lines of {ws / '.serve.log'}:\n{tail}")
         print("Started the course server.")
+    update_library(ws)
     (ws / "course.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 
     # With --lan the server wants its token from this computer too, and each start makes a new one.

@@ -82,6 +82,7 @@ Teach, at the top right of every page, writes the next lesson or updates lessons
 - Every page supports light and dark, including on a phone.
 - A phone link with `--lan` works on the same Wi-Fi.
 - A carry-over sheet collects rules that hold beyond one course.
+- A library page at `~/learn/index.html` lists every course, its rules and what you have shown you know.
 
 ## How it works
 
@@ -149,7 +150,7 @@ It runs on your own Claude plan. Reading and local quizzes need no live answers.
 - The server listens on localhost by default. With `--lan`, it listens on your local network behind a token in the phone link. Keep that link private.
 - Answers and teaching sessions run with `claude --restricted`: your own Claude settings, hooks and plugins stay out of them. Answers are read-only. Teaching sessions can edit course content, including lesson files, only inside the course folder.
 - `scripts/teach_guard.py` enforces that boundary and protects settings and shared assets. Served course pages run only the skill's own scripts.
-- Outside the course folder, the skill writes one file: its diagram style, as diagram-design's `learn` profile in `~/.diagram-design/profiles/learn.md`.
+- Outside the course folder, the skill writes its diagram style, as diagram-design's `learn` profile in `~/.diagram-design/profiles/learn.md`, and the library page `~/learn/index.html` with its two style files in `~/learn/library-assets/`, rebuilt when a course in `~/learn` is opened.
 
 <details>
 <summary>Install by hand</summary>
