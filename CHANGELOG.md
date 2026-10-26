@@ -2,7 +2,7 @@
 
 Notable changes to visual-teach. Versions follow [semantic versioning](https://semver.org): new features raise the middle number, fixes the last one. `.claude-plugin/plugin.json` carries the same version, and Claude Code installs with auto-update get a release when that number changes.
 
-## [Unreleased]
+## [1.5.0] - 2026-10-26
 
 ### Added
 
@@ -104,6 +104,7 @@ First public release.
 - Light and dark themes, a phone layout, and a phone link with `--lan`.
 - Windows process and path handling.
 
+[1.5.0]: https://github.com/drag88/visual-teach/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/drag88/visual-teach/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/drag88/visual-teach/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/drag88/visual-teach/compare/v1.2.1...v1.3.0
