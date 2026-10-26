@@ -120,10 +120,11 @@ def read_dict(path):
 class Course:
     """The workspace, its question log, and how to ask Claude about it."""
 
-    def __init__(self, ws, code, claude, web):
+    def __init__(self, ws, code, claude, web, codex=None):
         self.ws = Path(ws).resolve()
         self.code = Path(code).resolve() if code else None
         self.claude = claude
+        self.codex = codex
         self.web = list(web or [])
         self.git = shutil.which("git")
         self.log = self.ws / "questions.jsonl"
@@ -431,6 +432,19 @@ class Course:
 
     def settings(self):
         return read_dict(self.ws / "course.json")
+
+    # Engines
+
+    def engines(self):
+        """The engines that can answer here, Claude first."""
+        return [name for name, path in (("claude", self.claude), ("codex", self.codex)) if path]
+
+    def engine_default(self):
+        """The course's chosen engine when it can answer here, else the first that can. Read from course.json each
+        time, so open_course.py --engine takes effect without a restart."""
+        engines = self.engines()
+        chosen = self.settings().get("engine")
+        return chosen if chosen in engines else (engines[0] if engines else None)
 
     def teach_command(self):
         ws = rule_path(self.ws)
@@ -830,7 +844,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json({"ok": True, "course": str(course.ws), "tiers": {k: v[0] for k, v in TIERS.items()},
                               "web": course.web, "code": str(course.code) if course.code else None,
                               "lan": bool(self.server.token), "pid": os.getpid(), "version": VERSION,
-                              "skill": str(SKILL)})
+                              "skill": str(SKILL), "engines": course.engines(),
+                              "engine_default": course.engine_default()})
         if url.path == "/api/threads":
             # keep_blank_values: the course home page is the lesson "", not a request for every lesson
             lesson = parse_qs(url.query, keep_blank_values=True).get("lesson", [None])[0]
@@ -975,8 +990,10 @@ class CourseServer(ThreadingHTTPServer):
         super().server_close()
 
 
-def make_server(ws, port=8765, lan=False, code=None, claude=None, web=(), quiet=True):
-    course = Course(ws, code, claude or shutil.which("claude"), web)
+def make_server(ws, port=8765, lan=False, code=None, claude=None, web=(), quiet=True, codex=None):
+    """claude and codex are command paths; None looks them up on PATH, and "" means that engine is absent."""
+    course = Course(ws, code, shutil.which("claude") if claude is None else claude, web,
+                    shutil.which("codex") if codex is None else codex)
     handler = type("CourseHandler", (Handler,), {"course": course})
     server = CourseServer(("0.0.0.0" if lan else "127.0.0.1", port), handler)
     server.course = course
@@ -1003,8 +1020,8 @@ def main():
     ap.add_argument("--web", action="append", default=[], help="domain Deep answers may fetch (repeatable)")
     ap.add_argument("--lan", action="store_true", help="listen on the network for a phone")
     args = ap.parse_args()
-    if not shutil.which("claude"):
-        sys.exit("claude is not on PATH. Start this from the shell you use Claude Code in.")
+    if not shutil.which("claude") and not shutil.which("codex"):
+        sys.exit("Neither claude nor codex is on PATH. Start this from the shell you use Claude Code or Codex in.")
     server = make_server(args.workspace, args.port, args.lan, args.code, None, args.web, quiet=False)
     ws = server.course.ws
     run = {"pid": os.getpid(), "port": args.port, "url": f"http://localhost:{args.port}/"}

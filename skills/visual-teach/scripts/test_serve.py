@@ -144,7 +144,7 @@ class ServeTest(unittest.TestCase):
 
     def start(self, lan=False):
         self.server = serve.make_server(self.ws, port=0, lan=lan, code=self.code, claude=self.claude,
-                                        web=["docs.example.org", "github.com"])
+                                        web=["docs.example.org", "github.com"], codex="")
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -502,6 +502,48 @@ class ServeTest(unittest.TestCase):
         # open_course.py restarts a server whose code or skill folder differs from the installed one.
         self.assertEqual(info["version"], sync_course.code_version())
         self.assertEqual(info["skill"], str(serve.SKILL))
+
+    def test_ping_lists_the_engines_on_path(self):
+        info = json.loads(self.request("GET", "/api/ping")[1])
+        self.assertEqual(info["engines"], ["claude"])
+        self.assertEqual(info["engine_default"], "claude")
+
+    def test_codex_only_server_starts_and_reads_the_course_default_live(self):
+        self.server.shutdown()
+        self.server.server_close()
+        fake = Path(self.tmp.name) / "bin" / "codex"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        self.server = serve.make_server(self.ws, port=0, claude="", codex=str(fake))
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        info = json.loads(self.request("GET", "/api/ping")[1])
+        self.assertEqual((info["engines"], info["engine_default"]), (["codex"], "codex"))
+        # A course default naming an engine that is not here is ignored.
+        (self.ws / "course.json").write_text(json.dumps({"engine": "claude"}))
+        self.assertEqual(json.loads(self.request("GET", "/api/ping")[1])["engine_default"], "codex")
+
+    def test_course_default_engine_is_read_on_each_ping(self):
+        self.server.shutdown()
+        self.server.server_close()
+        fake = Path(self.tmp.name) / "bin" / "codex"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        self.server = serve.make_server(self.ws, port=0, claude=self.claude, codex=str(fake))
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.assertEqual(json.loads(self.request("GET", "/api/ping")[1])["engine_default"], "claude")
+        (self.ws / "course.json").write_text(json.dumps({"engine": "codex"}))
+        self.assertEqual(json.loads(self.request("GET", "/api/ping")[1])["engine_default"], "codex")
+
+    def test_server_needs_claude_or_codex(self):
+        empty = Path(self.tmp.name) / "empty"
+        empty.mkdir()
+        done = subprocess.run([sys.executable, str(HERE / "serve.py"), str(self.ws), "--port", "0"],
+                              env=dict(os.environ, PATH=str(empty)), capture_output=True, text=True, timeout=20)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("claude", done.stderr)
+        self.assertIn("codex", done.stderr)
 
     def test_rejects_cross_site_and_non_json_posts(self):
         resp, _ = self.request("POST", "/api/ask", {"kind": "ask"}, {"Origin": "https://evil.example"})

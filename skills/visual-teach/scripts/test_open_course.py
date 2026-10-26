@@ -261,6 +261,17 @@ class LanSettingTest(StubbedOpen):
         self.assertFalse(json.loads((self.ws / "course.json").read_text())["lan"])
 
 
+class EngineSettingTest(StubbedOpen):
+    def test_engine_is_saved_and_kept(self):
+        self.oc.ping = lambda port, token=None: None
+        self.oc.start = lambda ws, cfg, stale_pid=None: True
+        self.oc.port_free = lambda port: True
+        self.main("--engine", "codex")
+        self.assertEqual(json.loads((self.ws / "course.json").read_text())["engine"], "codex")
+        self.main()
+        self.assertEqual(json.loads((self.ws / "course.json").read_text())["engine"], "codex")
+
+
 class OpenCourseTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

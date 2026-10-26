@@ -220,6 +220,7 @@ def main():
     ap.add_argument("--lan", action=argparse.BooleanOptionalAction, default=None,
                     help="also listen on the network for a phone (--no-lan turns it off)")
     ap.add_argument("--port", type=int)
+    ap.add_argument("--engine", choices=("claude", "codex"), help="the engine answers and teaching use by default")
     ap.add_argument("--no-open", action="store_true", help="print the link without opening a browser")
     ap.add_argument("--stop", action="store_true", help="stop this course's server")
     args = ap.parse_args()
@@ -239,6 +240,8 @@ def main():
         cfg["web"] = args.web
     if args.lan is not None:
         cfg["lan"] = args.lan
+    if args.engine:
+        cfg["engine"] = args.engine  # read by the server on each request, so no restart is needed
     cfg["port"] = args.port or cfg.get("port") or DEFAULT_PORT
 
     run = read_json(ws / ".serve.json")
