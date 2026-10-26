@@ -116,7 +116,7 @@ python3 ~/.agents/skills/visual-teach/scripts/open_course.py ~/learn/<course>
 That is where `npx skills add -g` puts the skill. After a manual install, use:
 
 ```sh
-python3 ~/code/visual-teach/scripts/open_course.py ~/learn/<course>
+python3 ~/code/visual-teach/skills/visual-teach/scripts/open_course.py ~/learn/<course>
 ```
 
 Opening a course brings its shared files up to date, and after an update restarts its reading server; if a teaching session is running, the restart waits for the next open. Add `--lan` for a phone on the same Wi-Fi, and `--no-lan` to turn it off; each restart gives the phone a new link. The `--code` and `--lan` settings are saved for that course. Add `--stop` to stop its server.
@@ -149,7 +149,7 @@ It runs on your own Claude plan. Reading and local quizzes need no live answers.
 - Course files, notes and saved answers stay on your computer. Live questions send context to Claude through your signed-in account, including any files it reads from the `--code` folder, as in any Claude Code session. Point `--code` at code or notes you are allowed to share with Claude, not at folders of customer or personal data. Lessons quote code, never data.
 - The server listens on localhost by default. With `--lan`, it listens on your local network behind a token in the phone link. Keep that link private.
 - Answers and teaching sessions run with `claude --restricted`: your own Claude settings, hooks and plugins stay out of them. Answers are read-only. Teaching sessions can edit course content, including lesson files, only inside the course folder.
-- `scripts/teach_guard.py` enforces that boundary and protects settings and shared assets. Served course pages run only the skill's own scripts.
+- `skills/visual-teach/scripts/teach_guard.py` enforces that boundary and protects settings and shared assets. Served course pages run only the skill's own scripts.
 - Outside the course folder, the skill writes its diagram style, as diagram-design's `learn` profile in `~/.diagram-design/profiles/learn.md`, and the library page `~/learn/index.html` with its two style files in `~/learn/library-assets/`, rebuilt when a course in `~/learn` is opened.
 
 <details>
@@ -160,8 +160,8 @@ Clone the repo and link it into both agents' skill folders:
 ```sh
 mkdir -p ~/code ~/.claude/skills ~/.agents/skills
 git clone https://github.com/drag88/visual-teach.git ~/code/visual-teach
-ln -s ~/code/visual-teach ~/.claude/skills/visual-teach
-ln -s ~/code/visual-teach ~/.agents/skills/visual-teach
+ln -s ~/code/visual-teach/skills/visual-teach ~/.claude/skills/visual-teach
+ln -s ~/code/visual-teach/skills/visual-teach ~/.agents/skills/visual-teach
 ```
 
 </details>
@@ -171,15 +171,17 @@ ln -s ~/code/visual-teach ~/.agents/skills/visual-teach
 
 | Path | What it is |
 |---|---|
-| `SKILL.md` | The instructions Claude Code and Codex follow. |
+| `skills/visual-teach/` | The skill itself. Installs copy only this folder. |
+| `skills/visual-teach/SKILL.md` | The instructions Claude Code and Codex follow. |
+| `skills/visual-teach/agents/openai.yaml` | Codex settings for calling the skill by name. |
+| `skills/visual-teach/starter/` | Page templates, shared styles and scripts, the answer prompt and the diagram profile. |
+| `skills/visual-teach/scripts/` | The reading server, course opener, asset sync, course checker, teaching edit guard and tests. |
+| `skills/visual-teach/vendor/` | The bundled teach method and diagram-design, with their licences and source records. |
 | `.claude-plugin/` | The Claude Code plugin and the marketplace that serves it. |
 | `CHANGELOG.md` | What changed in each release. |
-| `agents/openai.yaml` | Codex settings for calling the skill by name. |
-| `starter/` | Page templates, shared styles and scripts, the answer prompt and the diagram profile. |
-| `scripts/` | The reading server, course opener, asset sync, course checker, teaching edit guard and tests. |
-| `vendor/` | The bundled teach method and diagram-design, with their licences and source records. |
+| `tests/` | The release check, which needs the repo around the skill. |
 | `docs/images/` | README screenshots of a demo course kept outside this repo. |
-| `LICENSE` | The MIT licence for visual-teach. |
+| `LICENSE` | The MIT licence for visual-teach; the skill folder carries a copy. |
 
 </details>
 
@@ -189,20 +191,20 @@ ln -s ~/code/visual-teach ~/.agents/skills/visual-teach
 The tests use a fake Claude, so they cost nothing. The reader and quiz tests need Python Playwright with Chromium.
 
 ```sh
-python3 scripts/test_serve.py
-python3 scripts/test_open_course.py
-python3 scripts/test_reader.py
-python3 scripts/test_quiz.py
-python3 scripts/test_release.py
+python3 skills/visual-teach/scripts/test_serve.py
+python3 skills/visual-teach/scripts/test_open_course.py
+python3 skills/visual-teach/scripts/test_reader.py
+python3 skills/visual-teach/scripts/test_quiz.py
+python3 tests/test_release.py
 ```
 
-After changing `starter/`, open each course again or run `python3 scripts/sync_course.py ~/learn/<course>`. Releases follow the steps at the end of `SKILL.md`: a version in `.claude-plugin/plugin.json`, a `CHANGELOG.md` entry, a `v<version>` tag and a GitHub release.
+After changing `starter/`, open each course again or run `python3 skills/visual-teach/scripts/sync_course.py ~/learn/<course>`. Releases follow the steps at the end of `skills/visual-teach/SKILL.md`: a version in `.claude-plugin/plugin.json`, a `CHANGELOG.md` entry, a `v<version>` tag and a GitHub release.
 
 </details>
 
 ## Credits
 
-The bundled [teach method by Matt Pocock](https://github.com/mattpocock/skills/tree/ad5400b930b297b0c0cb231ff1ffe42a7da666aa/skills/productivity/teach) and [diagram-design by Cathryn Lavery](https://github.com/cathrynlavery/diagram-design/tree/9874ad73813715fc36875e45afd9cd94c68f3c3f/skills/diagram-design) are both MIT licensed. Their pinned sources and notices are in [teach's UPSTREAM.md](vendor/teach/UPSTREAM.md) and [diagram-design's UPSTREAM.md](vendor/diagram-design/UPSTREAM.md).
+The bundled [teach method by Matt Pocock](https://github.com/mattpocock/skills/tree/ad5400b930b297b0c0cb231ff1ffe42a7da666aa/skills/productivity/teach) and [diagram-design by Cathryn Lavery](https://github.com/cathrynlavery/diagram-design/tree/9874ad73813715fc36875e45afd9cd94c68f3c3f/skills/diagram-design) are both MIT licensed. Their pinned sources and notices are in [teach's UPSTREAM.md](skills/visual-teach/vendor/teach/UPSTREAM.md) and [diagram-design's UPSTREAM.md](skills/visual-teach/vendor/diagram-design/UPSTREAM.md).
 
 ## License
 

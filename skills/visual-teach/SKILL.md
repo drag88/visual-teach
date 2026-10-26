@@ -1,6 +1,7 @@
 ---
 name: visual-teach
 description: Teach any topic over several sessions as a local course of short, visual, plain-English lessons that the learner reads in the browser, with live Claude answers on any passage they highlight. Self-contained - it bundles the teach method and diagram-design, its own clean minimal styles, quiz widgets, reading server and checks. Run /visual-teach <topic> to start a course, /visual-teach continue <course folder> to carry on, or /visual-teach open <course folder> just to read (in Codex, $visual-teach).
+license: MIT
 disable-model-invocation: true
 argument-hint: "A topic to learn, or: continue <course folder>, or: open <course folder>"
 ---
@@ -146,4 +147,4 @@ Served course pages run only the skill's three shared scripts: `theme.js`, `quiz
 
 After changing `serve.py`, `open_course.py`, `ask.js`, `ask.css`, `quiz.js`, `theme.js` or `style.css`, run `scripts/test_serve.py`, `scripts/test_open_course.py`, `scripts/test_reader.py` and `scripts/test_quiz.py`; they use a fake Claude, so they cost nothing. Opening a course brings it up to date; `sync_course.py` does the same without opening it.
 
-To release: raise the version in `.claude-plugin/plugin.json` (new features raise the middle number, fixes the last), add a matching `CHANGELOG.md` entry and link, run `scripts/test_release.py`, commit, push the commit to `main` (the plugin marketplace reads `main`), tag `v<version>`, push the tag, and publish a GitHub release with the entry as its notes. Plugin installs update only when the version changes.
+To release, from the repo root (this skill lives in its `skills/visual-teach/`): raise the version in `.claude-plugin/plugin.json` (new features raise the middle number, fixes the last), add a matching `CHANGELOG.md` entry and link, run `tests/test_release.py`, commit, push the commit to `main` (the plugin marketplace reads `main`), tag `v<version>`, push the tag, and publish a GitHub release with the entry as its notes. Plugin installs update only when the version changes.
