@@ -679,15 +679,20 @@ class Course:
             cmd += ["--add-dir", str(self.code)]
         return cmd
 
-    def teach_prompt(self, action, problems):
+    def teach_prompt(self, action, problems, engine="claude"):
+        codex = engine == "codex"
         lines = [
             f"Run one visual-teach teaching session for the course in {self.ws}, started from the course page.",
             f"Read {SKILL / 'SKILL.md'} and follow it, with these differences:",
             "- The server has already synced the course's shared files, and it runs the course check after you finish.",
-            "- You have no shell: run no script and take no screenshots. Read and edit files only.",
+            ("- Your shell runs in a sandbox: writes outside the course folder or to its protected files (course.json, "
+             ".serve.json, CLAUDE.md, AGENTS.md, .claude/, .codex/ and assets/ except assets/course.css) will fail. "
+             "Take no screenshots." if codex else
+             "- You have no shell: run no script and take no screenshots. Read and edit files only."),
             "- Edit only files inside the course folder. To mark a question thread handled, add its meta line "
             "after the last line of questions.jsonl.",
-            "- You cannot search the web" + (f"; you can fetch pages only from {', '.join(self.web)}" if self.web else "")
+            "- You cannot search the web"
+            + (f"; you can fetch pages only from {', '.join(self.web)}" if self.web and not codex else "")
             + ". Where a lesson needs a fact you cannot check in the course, the skill or the source folder, leave it "
             "out or mark it unchecked, and say so in your closing lines rather than writing it from memory.",
             f"Task: {TEACH_TASKS[action]}",
@@ -751,8 +756,8 @@ class Course:
                 return 409, "The last check found nothing to fix."
             if action == "refresh" and not isinstance(refresh, str):
                 return 404, "This course has no refresh command in course.json."
-            job = {"action": action, "state": "running", "started": now(), "lines": [], "summary": "",
-                   "check": None, "cost_usd": None, "error": None, "stopped": False}
+            job = {"action": action, "engine": engine, "state": "running", "started": now(), "lines": [],
+                   "summary": "", "check": None, "cost_usd": None, "tokens": None, "error": None, "stopped": False}
             self.job = job
         target = self.refresh_job if action == "refresh" else self.teach_job
         threading.Thread(target=target, args=(job, refresh if action == "refresh" else problems.get("text")),
@@ -767,18 +772,26 @@ class Course:
             elif event == "delta":
                 job["summary"] += data["text"]
 
+        codex = job["engine"] == "codex"
+        snapshot = None
         try:
             if job["stopped"]:
                 return
             sync_course.sync(self.ws)
             if job["stopped"]:
                 return
-            result = self.run(self.teach_command(), self.teach_prompt(job["action"], problems), send,
-                              lambda: job["stopped"])
+            if codex:
+                # After the sync, so the server's own asset updates are not mistaken for Codex's.
+                snapshot = self.protected_snapshot()
+                cmd = self.codex_command("teach", "deep")
+            else:
+                cmd = self.teach_command()
+            result = self.run(cmd, self.teach_prompt(job["action"], problems, job["engine"]), send,
+                              lambda: job["stopped"], engine=job["engine"])
             if job["stopped"] or result is None:
                 job["state"] = "stopped"
                 return
-            job["cost_usd"] = result["cost_usd"]
+            job["cost_usd"], job["tokens"] = result["cost_usd"], result["tokens"]
             job["error"] = failure(result)
             if job["error"]:
                 job["state"] = "failed"
@@ -792,6 +805,42 @@ class Course:
         finally:
             if job["stopped"]:
                 job["state"] = "stopped"
+            if snapshot is not None:
+                # On every exit: the Codex profile is the boundary, this catches a profile that stopped holding.
+                changed = self.restore_protected(snapshot)
+                if changed:
+                    job["error"] = (f"Codex changed {', '.join(changed)}, which it may not edit. It was put back; "
+                                    "lesson edits from this session were kept.")
+                    job["lines"].append(f"Put back {', '.join(changed)}")
+                    job["state"] = "failed"
+
+    def protected_snapshot(self):
+        """Bytes of every protected file now, keyed by path relative to the course. assets/course.css is the one
+        file under a protected folder that teaching may edit."""
+        snap = {}
+        for name in PROTECTED:
+            path = self.ws / name
+            files = [p for p in path.rglob("*") if p.is_file() and not p.is_symlink()] if path.is_dir() else [path]
+            for p in files:
+                rel = p.relative_to(self.ws).as_posix()
+                if rel != "assets/course.css":
+                    snap[rel] = p.read_bytes() if p.is_file() else None
+        return snap
+
+    def restore_protected(self, snapshot):
+        """Put every protected file back as the snapshot had it: edited and deleted ones rewritten, new ones
+        removed. Returns the relative paths that had changed."""
+        now_ = self.protected_snapshot()
+        changed = sorted(rel for rel in set(snapshot) | set(now_) if snapshot.get(rel) != now_.get(rel))
+        for rel in changed:
+            path = self.ws / rel
+            if snapshot.get(rel) is None:
+                if path.is_file():
+                    path.unlink()
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(snapshot[rel])
+        return changed
 
     def refresh_job(self, job, command):
         try:

