@@ -8,7 +8,7 @@
 </h1>
 
 **An agent skill that turns any topic, or any codebase, into a course of short visual lessons in your browser.<br>
-Highlight a passage and Claude answers beside it. Quizzes, diagrams and spaced review included.**
+Highlight a passage and Claude or Codex answers beside it. Quizzes, diagrams and spaced review included.**
 
 [![GitHub stars](https://img.shields.io/github/stars/drag88/visual-teach?style=flat-square&color=2f5bd3)](https://github.com/drag88/visual-teach/stargazers)
 [![skills.sh installs](https://skills.sh/b/drag88/visual-teach?style=flat-square)](https://skills.sh/drag88/visual-teach/visual-teach)
@@ -71,7 +71,7 @@ The CLI finds `skills/visual-teach/SKILL.md` and copies only that folder: the in
 
 </details>
 
-**Requirements:** Python 3.9 or later; Claude Code's `claude` command installed and signed in, for live answers; Node.js for the npx install; Python Playwright only for the lesson checks (it uses its own Chromium, or your installed Chrome). On Windows, type `python` or `py` wherever this page says `python3`.
+**Requirements:** Python 3.9 or later; Claude Code's `claude` or Codex's `codex` command installed and signed in, for live answers (with both, a switch in the page picks one); Node.js for the npx install; Python Playwright only for the lesson checks (it uses its own Chromium, or your installed Chrome). On Windows, type `python` or `py` wherever this page says `python3`.
 
 ## What you get
 
@@ -158,19 +158,20 @@ $visual-teach continue ~/learn/<course>
 
 | Action | Model | Typical time |
 |---|---|---|
-| Quick answer | Sonnet | About 5 seconds to start |
-| Deep answer | Opus | About 25 seconds |
-| Teaching session | Opus | About 5 to 15 minutes |
+| Quick answer | Sonnet, or GPT-6 Luna on Codex | About 5 seconds to start |
+| Deep answer | Opus, or GPT-6.1 Sol on Codex | About 25 seconds |
+| Teaching session | Opus, or GPT-6.1 Sol on Codex | About 5 to 15 minutes |
 | Reading and quizzes | None | Instant |
 
-It runs on your own Claude plan. Reading and local quizzes need no live answers.
+It runs on your own Claude or ChatGPT plan. Claude answers show their cost; Codex answers show tokens. Reading and local quizzes need no live answers.
 
 ## Privacy and safety
 
-- Course files, notes and saved answers stay on your computer. Live questions send context to Claude through your signed-in account, including any files it reads from the `--code` folder, as in any Claude Code session. Point `--code` at code or notes you are allowed to share with Claude, not at folders of customer or personal data. Lessons quote code, never data.
+- Course files, notes and saved answers stay on your computer. Live questions send context to Claude or Codex through your signed-in account, including any files it reads from the `--code` folder, as in any Claude Code or Codex session. Point `--code` at code or notes you are allowed to share, not at folders of customer or personal data. Lessons quote code, never data.
 - The server listens on localhost by default. With `--lan`, it listens on your local network behind a token in the phone link. Keep that link private.
 - Answers and teaching sessions run with `claude --restricted`: your own Claude settings, hooks and plugins stay out of them. Answers are read-only. Teaching sessions can edit course content, including lesson files, only inside the course folder.
-- `skills/visual-teach/scripts/teach_guard.py` enforces that boundary and protects settings and shared assets. Served course pages run only the skill's own scripts.
+- `skills/visual-teach/scripts/teach_guard.py` enforces that boundary and protects settings and shared assets.
+- Codex runs skip your own Codex config, rules, hooks and memories, and run under permission profiles the server builds per course: answers read only the course and its `--code` folder; teaching writes only unprotected course files; neither gets the network, temp folders or your shell's environment. The server proves these limits on your computer before it offers Codex, and turns Codex off if they fail. Served course pages run only the skill's own scripts.
 - Outside the course folder, the skill writes its diagram style, as diagram-design's `learn` profile in `~/.diagram-design/profiles/learn.md`, and the library page `~/learn/index.html` with its two style files in `~/learn/library-assets/`, rebuilt when a course in `~/learn` is opened.
 
 <details>

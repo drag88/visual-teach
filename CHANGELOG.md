@@ -2,6 +2,19 @@
 
 Notable changes to visual-teach. Versions follow [semantic versioning](https://semver.org): new features raise the middle number, fixes the last one. `.claude-plugin/plugin.json` carries the same version, and Claude Code installs with auto-update get a release when that number changes.
 
+## [1.6.0] - 2026-10-26
+
+### Added
+
+- Choose Claude or Codex for answers, answer checks and Teach sessions, from a switch beside Quick / Deep in the ask bar. It appears when both are installed and is remembered; `open_course.py --engine codex` sets a course's default. On Codex, Quick uses GPT-6 Luna and Deep GPT-6.1 Sol, and answers show tokens.
+- Codex runs under permission profiles the server builds for each course. Answers read only the course and its source folder. Teaching writes only unprotected course files. Neither gets the network, temp folders or your shell's environment. The server proves these limits with `codex sandbox` before offering Codex, and says why when it does not. `tests/probe_codex_sandbox.py` checks the real Codex after an update.
+- A bounded exhaustive check of the teaching edit guard, `tests/verify_teach_guard.py`, runs in CI.
+
+### Changed
+
+- The server starts with either `claude` or `codex` on PATH. With neither usable, the course still reads and the page says why answers are off.
+- The Teach panel's fix button reads "Fix these", since the session may run on either engine.
+
 ## [1.5.1] - 2026-10-26
 
 ### Changed
@@ -110,6 +123,7 @@ First public release.
 - Light and dark themes, a phone layout, and a phone link with `--lan`.
 - Windows process and path handling.
 
+[1.6.0]: https://github.com/drag88/visual-teach/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/drag88/visual-teach/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/drag88/visual-teach/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/drag88/visual-teach/compare/v1.3.1...v1.4.0
