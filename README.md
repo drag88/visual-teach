@@ -1,56 +1,77 @@
 <div align="center">
+
+<h1>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.png">
-    <img src="docs/images/banner.png" width="860" alt="An open book whose pages become a flowchart, with a note card beside a highlighted line">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/hero/hero-dark.webp">
+    <img alt="visual-teach. Highlight anything. Claude answers beside it." src="docs/hero/hero-light.webp">
   </picture>
-  <h1>visual-teach</h1>
-  <p><strong>Learn any topic, or any codebase, as short visual lessons in your browser.<br>
-  Highlight anything and Claude answers beside it.</strong></p>
-  <p>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License MIT"></a>
-    <a href="#install"><img src="https://img.shields.io/badge/skills.sh-install-blue" alt="skills.sh install"></a>
-    <img src="https://img.shields.io/badge/Claude_Code-grey" alt="Claude Code">
-    <img src="https://img.shields.io/badge/Codex-grey" alt="Codex">
-    <img src="https://img.shields.io/badge/Python-3.9%2B-blue" alt="Python 3.9+">
-  </p>
-  <img src="docs/images/demo.gif" width="860" alt="A reader highlights a sentence in a lesson about LRU caches, picks Explain, and the answer appears beside the paragraph.">
+</h1>
+
+**An agent skill that turns any topic, or any codebase, into a course of short visual lessons in your browser.<br>
+Highlight a passage and Claude answers beside it. Quizzes, diagrams and spaced review included.**
+
+[![GitHub stars](https://img.shields.io/github/stars/drag88/visual-teach?style=flat-square&color=2f5bd3)](https://github.com/drag88/visual-teach/stargazers)
+[![skills.sh installs](https://skills.sh/b/drag88/visual-teach?style=flat-square)](https://skills.sh/drag88/visual-teach/visual-teach)
+[![CI](https://img.shields.io/github/actions/workflow/status/drag88/visual-teach/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/drag88/visual-teach/actions/workflows/ci.yml)
+[![Plugin version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fdrag88%2Fvisual-teach%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&style=flat-square&color=555555)](CHANGELOG.md)
+[![MIT license](https://img.shields.io/badge/license-MIT-555555?style=flat-square)](LICENSE)
+
+[Install](#install) · [What you get](#what-you-get) · [How it works](#how-it-works) · [Your own code](#use-it-with-your-own-code-or-notes) · [Costs](#costs) · [Privacy](#privacy-and-safety) · [Changelog](CHANGELOG.md)
+
+<code>npx skills add drag88/visual-teach</code>
+
+<br><br>
+
+<img src="docs/images/demo.gif" width="860" alt="A reader highlights a sentence in a lesson about LRU caches, picks Explain, and the answer appears beside the paragraph.">
+
 </div>
 
-<a id="install"></a>
+<br>
 
-## Quick start
+Ask your agent in plain words:
 
-1. Install. In Claude Code, as a plugin that keeps itself up to date:
+- `/visual-teach how DNS works`
+- `/visual-teach how a request moves through ~/code/my-app`
+- `/visual-teach Bayesian statistics, so I can read our A/B test reports`
+- `/visual-teach continue ~/learn/dns`
 
-   ```text
-   /plugin install visual-teach --marketplace drag88/visual-teach
-   ```
+It asks a few questions about why you want to learn it, then writes the first lesson in about 5 to 15 minutes and opens it in your browser. In Codex, type `$visual-teach` instead.
 
-   On Claude Code before 2.1.275, run `/plugin marketplace add drag88/visual-teach`, then `/plugin install visual-teach@visual-teach`. Then turn on updates once: open `/plugin`, go to Marketplaces, choose visual-teach and Enable auto-update. Claude Code keeps plugins from other marketplaces at the installed version until you do.
+---
 
-   For Codex, or Codex and Claude Code together:
+## Install
 
-   ```sh
-   npx skills add drag88/visual-teach -g -a claude-code -a codex
-   ```
+In Claude Code, as a plugin that keeps itself up to date:
 
-   Update that copy with `npx skills update`. Keep one copy per computer: two copies both load, and each resets your courses to its own version.
+```text
+/plugin install visual-teach --marketplace drag88/visual-teach
+```
 
-2. Ask for a course in Claude Code:
+For Codex, or Codex and Claude Code together, with the cross-agent [`skills` CLI](https://skills.sh):
 
-   ```text
-   /visual-teach how DNS works
-   ```
+```sh
+npx skills add drag88/visual-teach -g -a claude-code -a codex
+```
 
-   As a plugin it is also `/visual-teach:visual-teach`. Or in Codex:
+Keep one copy per computer: two copies both load, and each resets your courses to its own version.
 
-   ```text
-   $visual-teach how DNS works
-   ```
+<details>
+<summary><b>Claude Code</b>: older versions and auto-update</summary>
 
-3. Answer a few questions about why you want to learn it. Claude then writes the first lesson, which takes about 5 to 15 minutes, and opens it in your browser. Highlight anything to ask.
+On Claude Code before 2.1.275, run `/plugin marketplace add drag88/visual-teach`, then `/plugin install visual-teach@visual-teach`. As a plugin the command is also `/visual-teach:visual-teach`.
 
-Requirements: Node.js for the npx install; Python 3.9 or later; Claude Code's `claude` command installed and signed in for live answers; Python Playwright only for the checks (it uses its own Chromium, or your installed Chrome). On Windows, type `python` or `py` wherever this page says `python3`.
+Turn on updates once: open `/plugin`, go to Marketplaces, choose visual-teach and Enable auto-update. Claude Code keeps plugins from other marketplaces at the installed version until you do.
+
+</details>
+
+<details>
+<summary><b>npx skills</b>: what it installs and how to update</summary>
+
+The CLI finds `skills/visual-teach/SKILL.md` and copies only that folder: the instructions, the reading server, the page templates and the bundled teach method and diagram-design. Update it with `npx skills update`.
+
+</details>
+
+**Requirements:** Python 3.9 or later; Claude Code's `claude` command installed and signed in, for live answers; Node.js for the npx install; Python Playwright only for the lesson checks (it uses its own Chromium, or your installed Chrome). On Windows, type `python` or `py` wherever this page says `python3`.
 
 ## What you get
 
