@@ -4,6 +4,10 @@ Notable changes to visual-teach. Versions follow [semantic versioning](https://s
 
 ## [Unreleased]
 
+### Added
+
+- The course home page lists the learning records under What you have shown, each with a Delete. A deleted record moves to the course's `.deleted/learning-records/` folder, so it can be put back.
+
 ### Fixed
 
 - Teaching sessions skip questions the learner deleted, instead of learning from them.

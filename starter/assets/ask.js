@@ -79,7 +79,10 @@
       }
     }
     document.addEventListener("quiz", onQuiz);
-    if (/^\/(index\.html)?$/.test(location.pathname)) showReview();
+    if (/^\/(index\.html)?$/.test(location.pathname)) {
+      showReview();
+      showRecords();
+    }
     showTeach();
   }
 
@@ -690,6 +693,33 @@
         parts.push(later);
       }
       lists[lists.length - 1].after(...parts);
+    }).catch(() => {});
+  }
+
+  // Learning records: what the learner has shown, listed on the course home page, each with a Delete for one that is
+  // wrong. The server moves the file to .deleted/, so it can be put back by hand.
+  function showRecords() {
+    getJSON("/api/records").then(({ records }) => {
+      if (!records || !records.length) return;
+      const head = node("h2");
+      head.textContent = "What you have shown";
+      const list = node("ul", "ask-records");
+      for (const r of records) {
+        const li = node("li");
+        const name = node("span");
+        name.textContent = r.title + (r.superseded ? " (superseded)" : "");
+        const del = button("Delete", () => {
+          if (!confirm(`Delete the learning record "${r.title}"?`)) return;
+          post("/api/records/delete", { name: r.name }).then((res) => {
+            if (!res.ok) return;
+            li.remove();
+            if (!list.children.length) { head.remove(); list.remove(); }
+          }).catch(() => {});
+        });
+        li.append(name, " ", del);
+        list.append(li);
+      }
+      main.append(head, list);
     }).catch(() => {});
   }
 

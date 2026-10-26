@@ -640,6 +640,30 @@ class Course:
             return True
         return done.returncode != 1  # 1 is "not ignored"; 0 is ignored and 128 is an error
 
+    def learning_records(self):
+        """The course's learning records, oldest first: file name and the first "# " heading."""
+        out = []
+        for p in sorted((self.ws / "learning-records").glob("*.md")):
+            text = read_text(p)
+            title = next((line[2:].strip() for line in text.split("\n") if line.startswith("# ")), p.stem)
+            out.append({"name": p.name, "title": title,
+                        "superseded": re.search(r"^Status:\s*superseded", text, re.M | re.I) is not None})
+        return out
+
+    def delete_record(self, name):
+        """Move one learning record to .deleted/learning-records/, so a mis-click can be undone by moving it back.
+        Only a name the listing would show is accepted, so no path can reach outside the folder."""
+        src = self.ws / "learning-records" / str(name)
+        if name not in {r["name"] for r in self.learning_records()} or src.is_symlink():
+            return False
+        dest = self.ws / ".deleted" / "learning-records"
+        dest.mkdir(parents=True, exist_ok=True)
+        target = dest / src.name
+        if target.exists():
+            target = dest / f"{src.stem}-{datetime.now():%Y%m%d-%H%M%S}{src.suffix}"
+        src.rename(target)
+        return True
+
     def review(self):
         """Questions the learner has missed and not yet got right three times running, due ones soonest first."""
         due, waiting, _ = review_of(self.records(self.quiz_log))
@@ -804,6 +828,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json(data) if status == 200 else self.send_error(status)
         if url.path == "/api/review":
             return self.json(course.review())
+        if url.path == "/api/records":
+            return self.json({"records": course.learning_records()})
         if url.path == "/api/teach":
             return self.json({"allowed": self.local(), "refresh": isinstance(course.settings().get("refresh"), str),
                               "job": course.job_view()})
@@ -835,6 +861,8 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/delete":
             course.append({"t": now(), "thread": body.get("thread"), "role": "meta", "event": "deleted"})
             return self.json({"ok": True})
+        if path == "/api/records/delete":
+            return self.json({"ok": True}) if course.delete_record(body.get("name")) else self.send_error(404, "No such record")
         if path == "/api/quiz":
             if not all(isinstance(body.get(k), str) and body[k] for k in ("lesson", "quiz")):
                 return self.send_error(400, "Needs lesson and quiz")

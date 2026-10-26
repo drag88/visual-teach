@@ -22,6 +22,8 @@ main > .ask-flash { animation: ask-flash 1.4s ease-out; }
 }
 
 /* Hint shown when the lesson is opened without the server */
+.ask-records button { font: inherit; font-size: 0.8rem; color: var(--muted); background: none; border: 0; cursor: pointer; padding: 0; }
+.ask-records button:hover, .ask-records button:focus-visible { color: var(--ink); text-decoration: underline; }
 .ask-review-later { color: var(--muted); font-size: 0.9rem; }
 .ask-hint { font-family: var(--sans); font-size: 0.72rem; color: var(--muted); margin: 3rem 0 0; text-align: center; }
 @media print { .ask-hint, .ask-bar, .ask-sel, .ask-panel, .ask-teach, .ask-teach-toggle { display: none !important; } }

@@ -424,6 +424,25 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(json.loads(data)["threads"], [])
         self.assertEqual(self.records()[-1]["event"], "deleted")
 
+    def test_learning_records_list_and_delete(self):
+        records = self.ws / "learning-records"
+        records.mkdir()
+        (records / "0001-runner.md").write_text("# Runner landed\n\nStatus: superseded by 0002\n")
+        (records / "0002-tools.md").write_text("# Tools landed\n")
+        _, data = self.request("GET", "/api/records")
+        self.assertEqual(json.loads(data)["records"], [
+            {"name": "0001-runner.md", "title": "Runner landed", "superseded": True},
+            {"name": "0002-tools.md", "title": "Tools landed", "superseded": False}])
+        for bad in ("../MISSION.md", "missing.md", None):
+            resp, _ = self.request("POST", "/api/records/delete", {"name": bad})
+            self.assertEqual(resp.status, 404, bad)
+        self.assertTrue((self.ws / "MISSION.md").exists())
+        resp, _ = self.request("POST", "/api/records/delete", {"name": "0001-runner.md"})
+        self.assertEqual(resp.status, 200)
+        self.assertTrue((self.ws / ".deleted/learning-records/0001-runner.md").exists(), "moved aside, not erased")
+        _, data = self.request("GET", "/api/records")
+        self.assertEqual([r["name"] for r in json.loads(data)["records"]], ["0002-tools.md"])
+
     def test_threads_for_a_blank_page_name_are_its_own(self):
         self.ask()
         _, data = self.request("GET", "/api/threads?lesson=")
