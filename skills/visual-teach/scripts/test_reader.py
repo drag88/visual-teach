@@ -20,7 +20,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import serve  # noqa: E402
 from check_lessons import launch  # noqa: E402
-from test_serve import FAKE_CLAUDE  # noqa: E402
+from test_serve import FAKE_CLAUDE, fake_codex  # noqa: E402
 
 STARTER = HERE.parent / "starter"
 WIDTHS = {"desktop": 1280, "big": 1728, "phone": 390}
@@ -453,6 +453,117 @@ def check_theme(base):
     return problems
 
 
+def check_engines(tmp, claude, shots):
+    """The Claude / Codex switch: shown only with two usable engines, remembered, sent with every question, and
+    never leaving a stale choice or a dead page when Codex is unavailable."""
+    problems = []
+    os.environ["FAKE_CODEX_LOG"] = str(tmp / "codex.log")
+    codex = fake_codex(tmp / "bin")
+    calls = lambda: [l for l in (tmp / "codex.log").read_text().splitlines() if '"exec"' in l] if (tmp / "codex.log").exists() else []  # noqa: E731
+
+    def served(name, claude_path, leak=""):
+        ws = tmp / f"eng-{name}"
+        ws.mkdir()
+        build_workspace(ws)
+        os.environ["FAKE_CODEX_LEAK"] = leak
+        server = serve.make_server(ws, port=0, claude=claude_path, codex=codex)
+        server.course.codex_ready()
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return ws, server, f"http://localhost:{server.server_address[1]}/lessons/0001-lesson.html"
+
+    with sync_playwright() as p:
+        browser = launch(p)
+        for width_name, width in (("phone", 390), ("desktop", 1280)):
+            ws, server, url = served(f"both-{width_name}", claude)
+            try:
+                (ws / "course.json").write_text(json.dumps({"engine": "codex"}))
+                ctx = browser.new_context(viewport={"width": width, "height": 800})
+                pg = ctx.new_page()
+                pg.goto(url)
+                pick = pg.locator(".ask-engine button")
+                if pick.count() != 2:
+                    problems.append(f"engines {width_name}: no Claude / Codex switch with both engines usable")
+                    continue
+                if pg.locator('.ask-engine button[aria-pressed="true"]').inner_text() != "Codex":
+                    problems.append(f"engines {width_name}: the course default (Codex) is not selected")
+                send_box, bar_box = pg.locator(".ask-send").bounding_box(), pg.locator(".ask-bar").bounding_box()
+                box = pg.locator(".ask-bar textarea").bounding_box()
+                last = pg.locator(".ask-engine button").last.bounding_box()
+                if (send_box["x"] + send_box["width"] > width or box["width"] < 0.5 * bar_box["width"]
+                        or last["x"] + last["width"] > send_box["x"] + 1):
+                    problems.append(f"engines {width_name}: the switch squeezes the question box or clips the controls")
+                before = len(calls())
+                pg.locator(".ask-bar textarea").fill("What is the runner?")
+                pg.locator(".ask-bar textarea").press("Enter")
+                pg.locator(".ask-card .ask-meta", has_text="first words").last.wait_for(timeout=15000)
+                meta = pg.locator(".ask-card .ask-meta").last.inner_text()
+                if len(calls()) != before + 1 or "tokens" not in meta or "$" in meta:
+                    problems.append(f"engines {width_name}: a Codex question did not reach Codex or shows a cost: {meta!r}")
+                # Ask Claude, then switch to Codex for a follow-up in the same card.
+                pg.locator('.ask-engine button[data-engine="claude"]').focus()
+                pg.keyboard.press("Enter")
+                pg.locator(".ask-bar textarea").fill("Who is the worker?")
+                pg.locator(".ask-bar textarea").press("Enter")
+                card = pg.locator(".ask-card").last
+                card.locator(".ask-meta", has_text="first words").wait_for(timeout=15000)
+                pg.locator('.ask-engine button[data-engine="codex"]').click()
+                before = len(calls())
+                card.locator(".ask-follow textarea").fill("And then?")
+                card.locator(".ask-follow textarea").press("Enter")
+                pg.wait_for_function("() => !document.querySelector('.ask-card.busy')", timeout=15000)
+                if len(calls()) != before + 1:
+                    problems.append(f"engines {width_name}: a follow-up after switching to Codex did not go to Codex")
+                pg.locator('.ask-engine button[data-engine="claude"]').click()
+                pg.reload()
+                if pg.locator('.ask-engine button[aria-pressed="true"]').inner_text() != "Claude":
+                    problems.append(f"engines {width_name}: the choice of Claude is not remembered over the course default")
+                if shots:
+                    pg.screenshot(path=str(shots / f"engines-{width_name}.png"))
+                ctx.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        ws, server, url = served("unavailable", claude, leak="ask-read-outside")
+        try:
+            ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+            ctx.add_init_script("localStorage.setItem('vt-engine', 'codex')")
+            pg = ctx.new_page()
+            pg.goto(url)
+            note = pg.locator(".ask-engine-note")
+            if pg.locator(".ask-engine").count() or not note.count() or "ask-read-outside" not in note.inner_text():
+                problems.append("engines: an unavailable Codex still shows the switch or hides the reason")
+            elif note.get_attribute("aria-live") != "polite":
+                problems.append("engines: the reason line is not announced")
+            before = len(calls())
+            pg.locator(".ask-bar textarea").fill("Who answers?")
+            pg.locator(".ask-bar textarea").press("Enter")
+            pg.locator(".ask-card .ask-meta", has_text="first words").last.wait_for(timeout=15000)
+            if len(calls()) != before:
+                problems.append("engines: a stale remembered Codex choice still sent the question to Codex")
+            ctx.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        ws, server, url = served("none", "", leak="ask-read-outside")
+        try:
+            ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+            pg = ctx.new_page()
+            pg.goto(url)
+            if not pg.locator(".ask-bar textarea").is_disabled() or not pg.locator(".ask-engine-note").count():
+                problems.append("engines: with no usable engine the ask bar is not disabled with a reason")
+            if not pg.locator("main h1").is_visible():
+                problems.append("engines: with no usable engine the lesson does not read")
+            ctx.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+        os.environ.pop("FAKE_CODEX_LEAK", None)
+        browser.close()
+    return problems
+
+
 def check_teaching(base, course, shots):
     """Teach, beside the light/dark switch on every page, opens a panel that starts sessions, shows their progress
     and check, and offers a fix."""
@@ -486,7 +597,7 @@ def check_teaching(base, course, shots):
                 problems.append(f"teaching ({name}): no way to see the updated pages")
             course.check = lambda *_: (False, "0001-lesson.html: sentence over 25 words")
             pg.locator(".ask-teach-actions button", has_text="Update lessons").click()
-            fix = pg.locator(".ask-teach button", has_text="Ask Claude to fix these")
+            fix = pg.locator(".ask-teach button", has_text="Fix these")
             fix.wait_for()
             pg.locator(".ask-teach-check", has_text="sentence over 25 words").wait_for()
             course.check = lambda *_: (True, "ok")
@@ -575,7 +686,7 @@ def main():
             ws = tmp / name
             ws.mkdir()
             build_workspace(ws)
-            server = serve.make_server(ws, port=0, claude=str(fake))
+            server = serve.make_server(ws, port=0, claude=str(fake), codex="")
             threading.Thread(target=server.serve_forever, daemon=True).start()
             try:
                 problems += run(name, width, f"http://localhost:{server.server_address[1]}", shots)
@@ -590,7 +701,7 @@ def main():
             missed = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
             (ws / "quiz.jsonl").write_text(json.dumps({"t": missed, "lesson": "lessons/0001-lesson.html", "quiz": "q-old",
                                                        "type": "mcq", "q": "Which part does the work?", "right": False}) + "\n")
-            server = serve.make_server(ws, port=0, code=tmp / f"code-{name}", claude=str(fake))
+            server = serve.make_server(ws, port=0, code=tmp / f"code-{name}", claude=str(fake), codex="")
             threading.Thread(target=server.serve_forever, daemon=True).start()
             try:
                 problems += check_sources(name, SOURCE_WIDTHS[name], f"http://localhost:{server.server_address[1]}", ws,
@@ -602,12 +713,13 @@ def main():
         ws.mkdir()
         build_workspace(ws)
         os.environ["FAKE_TEXT"] = HOSTILE
-        server = serve.make_server(ws, port=0, claude=str(fake))
+        server = serve.make_server(ws, port=0, claude=str(fake), codex="")
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             problems += check_answers_are_inert(f"http://localhost:{server.server_address[1]}")
             problems += check_theme(f"http://localhost:{server.server_address[1]}")
             problems += check_teaching(f"http://localhost:{server.server_address[1]}", server.course, shots)
+            problems += check_engines(tmp, str(fake), shots)
         finally:
             os.environ.pop("FAKE_TEXT", None)
             server.shutdown()
@@ -616,7 +728,7 @@ def main():
         print("\n".join(problems))
         sys.exit(1)
     print("ok: highlight, stream, follow-up, whole-page ask, reload and delete at", ", ".join(WIDTHS),
-          "+ source panel, code actions, Check my answer and review at " + ", ".join(SOURCE_WIDTHS) + " + hostile answers render inert + theme switch + teaching from the page")
+          "+ source panel, code actions, Check my answer and review at " + ", ".join(SOURCE_WIDTHS) + " + hostile answers render inert + theme switch + teaching from the page + engine switch")
 
 
 if __name__ == "__main__":

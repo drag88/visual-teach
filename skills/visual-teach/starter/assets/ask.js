@@ -16,6 +16,10 @@
   const narrow = matchMedia("(max-width: 720px), (pointer: coarse)");
   const cards = [];
   let mode = store("vt-mode") || "quick";
+  // The engines the server says may run now, and the one in use: the remembered choice only while it is usable.
+  let engines = [];
+  let engine = null;
+  let engineNote = ""; // why Codex is not offered, or why nothing can answer
   let code = null; // the source folder answers may read, from ping
 
   const blocks = [...main.children].filter((el) => !el.matches(SKIP));
@@ -34,6 +38,11 @@
 
   function start(info) {
     code = info.code || null;
+    engines = info.engines || ["claude"];
+    const kept = store("vt-engine");
+    engine = engines.includes(kept) ? kept : info.engine_default || engines[0] || null;
+    engineNote = engines.length ? (info.codex_unavailable || "")
+      : (info.codex_unavailable || "No engine can answer on this computer.") + " Reading still works.";
     document.body.classList.add("ask-on");
     document.body.classList.toggle("ask-hidden", store("vt-answers") === "hidden");
     buildSelectionBar();
@@ -269,7 +278,35 @@
     sendBtn.type = "submit";
     sendBtn.textContent = "↑";
     sendBtn.setAttribute("aria-label", "Send");
-    bar.append(input, key, showBtn, modes, sendBtn);
+    const parts = [input, key, showBtn, modes];
+    if (engines.length > 1) {
+      const pick = node("div", "ask-mode ask-engine");
+      pick.setAttribute("role", "group");
+      pick.setAttribute("aria-label", "Answer engine");
+      for (const e of engines) {
+        const b = node("button");
+        b.type = "button";
+        b.dataset.engine = e;
+        b.textContent = e === "codex" ? "Codex" : "Claude";
+        b.setAttribute("aria-pressed", String(e === engine));
+        b.addEventListener("click", () => {
+          engine = e;
+          store("vt-engine", e);
+          pick.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.engine === e)));
+          if (teach) renderTeach(teach.job);
+        });
+        pick.append(b);
+      }
+      parts.push(pick);
+    }
+    bar.append(...parts, sendBtn);
+    if (engineNote) {
+      const note = node("p", "ask-engine-note");
+      note.setAttribute("aria-live", "polite");
+      note.textContent = engineNote;
+      bar.prepend(note);
+    }
+    if (!engine) bar.querySelectorAll("textarea, button").forEach((el) => { el.disabled = true; });
     document.body.append(bar);
     bar.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -420,6 +457,7 @@
     card.lastBody = body;
     card.lastQuestion = question;
     const ex = exchange(card, question);
+    if (engine) body.engine = engine;
     ex.status.textContent = "Thinking…";
     ex.text = "";
     card.controller = new AbortController();
@@ -786,7 +824,7 @@
   }
 
   function startTeach(action) {
-    post("/api/teach", { action })
+    post("/api/teach", { action, ...(engine ? { engine } : {}) })
       .then((r) => r.json().catch(() => ({})).then((d) => (r.ok ? d : Promise.reject(new Error(d.error || "the server answered " + r.status)))))
       .then(({ job }) => renderTeach(job))
       .catch(async (err) => {
@@ -813,6 +851,7 @@
   }
 
   function renderTeach(job) {
+    teach.job = job; // kept so switching engine can redraw the panel's wording
     const { toggle, panel } = teach;
     const running = Boolean(job && job.state === "running");
     clearTimeout(teachTimer); // a start from this page renders without pollTeach, so one may be waiting
@@ -850,7 +889,7 @@
     if (job) {
       const ended = node("p", "ask-teach-now");
       ended.append(Object.assign(node("span", `ask-teach-ended ${job.state}`), { textContent: `${TEACH_LABEL[job.action]}: ${TEACH_ENDED[job.state] || job.state}` }),
-        Object.assign(node("span", "ask-teach-time"), { textContent: job.cost_usd != null ? `≈$${Number(job.cost_usd).toFixed(2)}` : "" }));
+        Object.assign(node("span", "ask-teach-time"), { textContent: [engineName(job.engine), price(job)].filter(Boolean).join(" · ") }));
       panel.append(ended);
       if (job.summary.trim()) {
         const summary = node("div", "ask-teach-summary");
@@ -869,16 +908,19 @@
         if (!passed) panel.append(Object.assign(node("pre", "ask-teach-check"), { textContent: job.check.text }));
       }
       const after = node("p", "ask-teach-after");
-      if (job.check && job.check.ok === false) after.append(button("Ask Claude to fix these", () => startTeach("fix")));
+      if (job.check && job.check.ok === false && engine) after.append(button("Fix these", () => startTeach("fix")));
       if (job.state === "done") after.append(Object.assign(node("a"), { href: location.href.split("#")[0], textContent: "Reload to see the changes" }));
       if (after.children.length) panel.append(after);
     } else {
-      panel.append(textLine("ask-teach-note", "Runs a session with Claude (Opus) in this course's folder. "
-        + "It takes 5 to 15 minutes and carries on if you close the page."));
+      panel.append(textLine("ask-teach-note", (engine === "codex" ? "Runs a session with Codex (GPT-6.1 Sol)"
+        : engine ? "Runs a session with Claude (Opus)" : engineNote) + (engine ? " in this course's folder. "
+        + "It takes 5 to 15 minutes and carries on if you close the page." : "")));
     }
     const actions = node("div", "ask-teach-actions");
     for (const action of ["next", "update", ...(teach.refresh ? ["refresh"] : [])]) {
-      actions.append(button(TEACH_LABEL[action], () => startTeach(action)));
+      const b = button(TEACH_LABEL[action], () => startTeach(action));
+      b.disabled = !engine && action !== "refresh"; // refresh runs the course's own command, no engine
+      actions.append(b);
     }
     panel.append(actions);
     refocus(focused);
@@ -1033,8 +1075,20 @@
     if (m) parts.push(`${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}`);
     else if (d.model) parts.push(d.model);
     if (d.ms_first_word != null) parts.push(`first words ${(d.ms_first_word / 1000).toFixed(1)}s`);
-    if (d.cost_usd != null) parts.push(`≈$${Number(d.cost_usd).toFixed(2)}`);
+    const cost = price(d);
+    if (cost) parts.push(cost);
     return parts.join(" · ");
+  }
+
+  // Claude reports a cost; Codex reports only tokens.
+  function price(d) {
+    if (d.cost_usd != null) return `≈$${Number(d.cost_usd).toFixed(2)}`;
+    if (d.tokens != null) return `${d.tokens < 1000 ? d.tokens : Math.round(d.tokens / 1000) + "k"} tokens`;
+    return "";
+  }
+
+  function engineName(e) {
+    return engines.length > 1 && e ? (e === "codex" ? "Codex" : "Claude") : "";
   }
 
   function esc(s) {

@@ -199,7 +199,15 @@ body.ask-on { padding-bottom: 5rem; }
   font: inherit; font-size: 0.72rem; color: var(--muted); background: none; border: 0; padding: 0.25rem 0.5rem; cursor: pointer;
 }
 .ask-mode button[aria-pressed="true"] { background: var(--note-bg); color: var(--ink); font-weight: 600; }
-@media (max-width: 720px) { .ask-key { display: none; } }
+.ask-bar:has(.ask-engine-note) { flex-wrap: wrap; }
+.ask-engine-note { flex-basis: 100%; margin: 0 0 0.2rem; color: var(--muted); font-size: 0.72rem; }
+.ask-bar :disabled { opacity: 0.5; cursor: not-allowed; }
+@media (max-width: 720px) {
+  .ask-key { display: none; }
+  /* With the engine switch too, the question gets its own row so it is not squeezed to a letter. */
+  .ask-bar:has(.ask-engine) { flex-wrap: wrap; justify-content: flex-end; }
+  .ask-bar:has(.ask-engine) textarea { flex-basis: 100%; }
+}
 
 /* Wide screens: text on the left, answer cards in the right margin. The answer column takes the spare
    width (up to 30rem) and the pair sits centred, so the empty space either side stays small and even.
