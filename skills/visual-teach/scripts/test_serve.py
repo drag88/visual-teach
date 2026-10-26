@@ -63,6 +63,31 @@ for piece in pieces:
 out({"type": "result", "subtype": "success", "total_cost_usd": 0.0123, "session_id": session})
 '''
 
+# A stand-in for codex: `login status`, `sandbox` (the preflight) and `exec` (answers and teaching). Each preflight
+# command starts with ": vt-probe <name> <ok|deny>;". A probe named in FAKE_CODEX_LEAK runs for real, as if the
+# sandbox let everything through; otherwise the expected outcome is reported, and "ok" probes really run.
+FAKE_CODEX = r'''#!/usr/bin/env python3
+import json, os, re, subprocess, sys
+argv = sys.argv[1:]
+log = os.environ.get("FAKE_CODEX_LOG")
+def record(entry):
+    if log:
+        with open(log, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+if argv[:2] == ["login", "status"]:
+    record({"login": True})
+    sys.exit(1 if os.environ.get("FAKE_CODEX_LOGGED_OUT") else 0)
+if argv[:1] == ["sandbox"]:
+    cmd = argv[-1]
+    m = re.match(r": vt-probe (\S+) (ok|deny);", cmd)
+    name, expect = m.groups()
+    record({"probe": name, "argv": argv})
+    if name in os.environ.get("FAKE_CODEX_LEAK", "").split(",") or expect == "ok":
+        sys.exit(subprocess.run(argv[argv.index("--") + 1:]).returncode)
+    sys.exit(1)
+record({"argv": argv, "stdin": sys.stdin.read()})
+'''
+
 
 def make_workspace(root):
     (root / "lessons").mkdir()
@@ -115,6 +140,137 @@ class GuardTest(unittest.TestCase):
     def test_anything_unexpected_blocks(self):
         self.assertEqual(self.guard("not json"), 2)
         self.assertEqual(self.guard({"tool_name": "Edit", "tool_input": {}}), 2)
+
+
+def fake_codex(folder):
+    path = Path(folder) / "codex"
+    path.write_text(FAKE_CODEX)
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    return str(path)
+
+
+class CodexPreflightTest(unittest.TestCase):
+    """The Codex permission profiles and the preflight that proves them before Codex is offered."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name).resolve()
+        self.ws, self.code = base / "course", base / "code"
+        (self.ws / "lessons").mkdir(parents=True)
+        (self.ws / "assets").mkdir()
+        self.code.mkdir()
+        (self.ws / "course.json").write_text(json.dumps({"port": 1}))
+        (self.ws / "lessons" / "one.html").write_text("<main><p>x</p></main>")
+        bindir = base / "bin"
+        bindir.mkdir()
+        self.codex = fake_codex(bindir)
+        self.log = base / "codex.log"
+        os.environ["FAKE_CODEX_LOG"] = str(self.log)
+        for k in ("FAKE_CODEX_LEAK", "FAKE_CODEX_LOGGED_OUT"):
+            os.environ.pop(k, None)
+        self.course = serve.Course(self.ws, self.code, "", [], self.codex)
+
+    def tearDown(self):
+        shutil.rmtree(self.course.tmp, ignore_errors=True)
+        self.tmp.cleanup()
+
+    def entries(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
+
+    def test_ask_profile_reads_only_the_course_and_code(self):
+        profile = self.course.codex_profile("ask")
+        self.assertIn('":root" = "deny"', profile)
+        self.assertIn(f'{json.dumps(str(self.ws))} = "read"', profile)
+        self.assertIn(f'{json.dumps(str(self.code))} = "read"', profile)
+        self.assertNotIn('"write"', profile)
+        self.assertNotIn(json.dumps(str(serve.SKILL)), profile, "answers cannot read the skill, as on Claude")
+        self.assertIn('":tmpdir" = "deny"', profile)
+        self.assertIn("enabled = false", profile)
+
+    def test_teach_profile_writes_only_unprotected_course_files(self):
+        profile = self.course.codex_profile("teach")
+        self.assertIn(f'{json.dumps(str(self.ws))} = "write"', profile)
+        for rel in ("course.json", ".serve.json", "CLAUDE.md", "AGENTS.md", ".claude", ".codex", "assets"):
+            self.assertIn(f'{json.dumps(str(self.ws / rel))} = "read"', profile, rel)
+        self.assertIn(f'{json.dumps(str(self.ws / "assets" / "course.css"))} = "write"', profile)
+        self.assertIn(f'{json.dumps(str(serve.SKILL))} = "read"', profile)
+
+    def test_every_codex_command_is_isolated(self):
+        os.environ["VT_SECRET_SENTINEL"] = "hunter2"
+        self.addCleanup(os.environ.pop, "VT_SECRET_SENTINEL", None)
+        for cmd in (self.course.codex_command("ask", "quick"), self.course.codex_command("ask", "deep", "s-1"),
+                    self.course.codex_command("teach", "deep")):
+            joined = " ".join(cmd)
+            self.assertEqual(cmd[0], os.path.realpath(self.codex), "the resolved binary, not a launcher link")
+            for flag in ("--json", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules"):
+                self.assertIn(flag, cmd)
+            self.assertNotIn("--sandbox", cmd, "--sandbox would switch the permission profile off")
+            self.assertNotIn("--add-dir", cmd)
+            self.assertNotIn("-s", cmd)
+            self.assertIn("project_doc_max_bytes=0", cmd)
+            for feature in ("hooks", "memories", "multi_agent", "plugins", "shell_snapshot"):
+                self.assertIn(feature, cmd[cmd.index("--disable"):])
+            self.assertIn('web_search="disabled"', cmd)
+            self.assertIn('shell_environment_policy.inherit="none"', cmd)
+            self.assertNotIn("hunter2", joined, "server secrets never reach sandboxed commands")
+        self.assertEqual(self.course.codex_command("ask", "deep", "s-1")[-3:], ["resume", "s-1", "-"])
+        self.assertIn("gpt-6-luna", self.course.codex_command("ask", "quick"))
+        self.assertIn("gpt-6.1-sol", self.course.codex_command("ask", "deep"))
+
+    def test_preflight_passes_and_offers_codex(self):
+        self.assertEqual(self.course.codex_ready(), (True, None))
+        self.assertEqual(self.course.usable_engines(), ["codex"])
+        names = {e["probe"] for e in self.entries() if "probe" in e}
+        self.assertTrue({"ask-read-course", "ask-read-outside", "ask-write", "ask-network", "teach-protected-write",
+                         "teach-write-outside", "teach-write-tmp", "teach-network", "teach-write-lesson"} <= names)
+        self.assertEqual([p.name for p in (self.ws / "lessons").iterdir()], ["one.html"], "scratch lesson removed")
+
+    def test_a_leaking_probe_hides_codex_and_names_itself(self):
+        for probe in ("ask-read-outside", "ask-network", "teach-write-tmp", "teach-write-outside", "ask-write"):
+            os.environ["FAKE_CODEX_LEAK"] = probe
+            course = serve.Course(self.ws, self.code, "", [], self.codex)
+            self.addCleanup(shutil.rmtree, course.tmp, True)
+            ok, reason = course.codex_ready()
+            self.assertFalse(ok, probe)
+            self.assertIn(probe, reason)
+            self.assertEqual(course.usable_engines(), [])
+
+    def test_a_permissive_sandbox_leaves_course_json_alone(self):
+        os.environ["FAKE_CODEX_LEAK"] = "teach-protected-write"
+        before = (self.ws / "course.json").read_bytes()
+        ok, reason = self.course.codex_ready()
+        self.assertFalse(ok)
+        self.assertIn("teach-protected-write", reason)
+        self.assertEqual((self.ws / "course.json").read_bytes(), before)
+
+    def test_signed_out_codex_is_not_offered(self):
+        os.environ["FAKE_CODEX_LOGGED_OUT"] = "1"
+        ok, reason = self.course.codex_ready()
+        self.assertFalse(ok)
+        self.assertIn("codex login", reason)
+
+    def test_a_changed_codex_binary_is_probed_again(self):
+        self.course.codex_ready()
+        self.course.codex_ready()
+        self.assertEqual(sum("login" in e for e in self.entries()), 1, "cached while the binary is unchanged")
+        newer = Path(self.codex).with_name("codex-2")
+        newer.write_text(FAKE_CODEX)
+        newer.chmod(0o755)
+        Path(self.codex).unlink()
+        Path(self.codex).symlink_to(newer)
+        self.course.codex_ready()
+        self.assertEqual(sum("login" in e for e in self.entries()), 2)
+
+    def test_engine_resolution_never_picks_an_unusable_engine(self):
+        os.environ["FAKE_CODEX_LEAK"] = "ask-read-outside"
+        course = serve.Course(self.ws, self.code, "/bin/echo", [], self.codex)
+        self.addCleanup(shutil.rmtree, course.tmp, True)
+        (self.ws / "course.json").write_text(json.dumps({"engine": "codex"}))
+        self.assertEqual(course.engine_default(), "claude")
+        self.assertEqual(course.resolve_engine(None), ("claude", None))
+        engine, error = course.resolve_engine("codex")
+        self.assertIsNone(engine)
+        self.assertIn("ask-read-outside", error)
 
 
 class ServeTest(unittest.TestCase):
@@ -511,10 +667,8 @@ class ServeTest(unittest.TestCase):
     def test_codex_only_server_starts_and_reads_the_course_default_live(self):
         self.server.shutdown()
         self.server.server_close()
-        fake = Path(self.tmp.name) / "bin" / "codex"
-        fake.write_text("#!/bin/sh\nexit 0\n")
-        fake.chmod(0o755)
-        self.server = serve.make_server(self.ws, port=0, claude="", codex=str(fake))
+        os.environ["FAKE_CODEX_LOG"] = str(Path(self.tmp.name) / "codex.log")
+        self.server = serve.make_server(self.ws, port=0, claude="", codex=fake_codex(Path(self.tmp.name) / "bin"))
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         info = json.loads(self.request("GET", "/api/ping")[1])
@@ -526,15 +680,32 @@ class ServeTest(unittest.TestCase):
     def test_course_default_engine_is_read_on_each_ping(self):
         self.server.shutdown()
         self.server.server_close()
-        fake = Path(self.tmp.name) / "bin" / "codex"
-        fake.write_text("#!/bin/sh\nexit 0\n")
-        fake.chmod(0o755)
-        self.server = serve.make_server(self.ws, port=0, claude=self.claude, codex=str(fake))
+        os.environ["FAKE_CODEX_LOG"] = str(Path(self.tmp.name) / "codex.log")
+        self.server = serve.make_server(self.ws, port=0, claude=self.claude, codex=fake_codex(Path(self.tmp.name) / "bin"))
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.assertEqual(json.loads(self.request("GET", "/api/ping")[1])["engine_default"], "claude")
         (self.ws / "course.json").write_text(json.dumps({"engine": "codex"}))
         self.assertEqual(json.loads(self.request("GET", "/api/ping")[1])["engine_default"], "codex")
+
+    def test_requests_for_an_unusable_engine_are_refused(self):
+        self.server.shutdown()
+        self.server.server_close()
+        os.environ["FAKE_CODEX_LOG"] = str(Path(self.tmp.name) / "codex.log")
+        os.environ["FAKE_CODEX_LEAK"] = "ask-read-outside"
+        self.addCleanup(os.environ.pop, "FAKE_CODEX_LEAK", None)
+        self.server = serve.make_server(self.ws, port=0, claude=self.claude, codex=fake_codex(Path(self.tmp.name) / "bin"))
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        info = json.loads(self.request("GET", "/api/ping")[1])
+        self.assertEqual(info["engines"], ["claude"])
+        self.assertIn("ask-read-outside", info["codex_unavailable"])
+        _, events = self.ask(engine="codex")
+        self.assertEqual(events[-1][0], "error")
+        self.assertIn("Codex", events[-1][1]["message"])
+        resp, data = self.request("POST", "/api/teach", {"action": "next", "engine": "codex"})
+        self.assertEqual(resp.status, 409)
+        self.assertIn("Codex", json.loads(data)["error"])
 
     def test_server_needs_claude_or_codex(self):
         empty = Path(self.tmp.name) / "empty"

@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import select
+import shlex
 import shutil
 import signal
 import socket
@@ -39,6 +40,15 @@ import sync_course  # the scripts folder is on the path when serve.py runs
 
 SKILL = Path(__file__).resolve().parent.parent
 TIERS = {"quick": ("sonnet", "low"), "deep": ("opus", "high")}
+CODEX_TIERS = {"quick": ("gpt-6-luna", "low"), "deep": ("gpt-6.1-sol", "medium")}
+# Codex features a run never needs and that would reach past the course: the learner's hooks, memories and plugins,
+# agents, browsers, and the shell snapshot, which copies the login shell's environment into every command.
+CODEX_OFF = ("hooks", "memories", "multi_agent", "plugins", "apps", "browser_use", "in_app_browser", "computer_use",
+             "shell_snapshot", "goals")
+# The only environment a Codex shell command sees: enough to run tools, nothing that could hold a secret.
+CODEX_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE", "SSL_CERT_DIR")
+# Files a teaching session may read but never change (scripts/teach_guard.py keeps the Claude side to the same list).
+PROTECTED = ("course.json", ".serve.json", "CLAUDE.md", "AGENTS.md", ".claude", ".codex", "assets")
 ALWAYS_QUICK = {"explain", "simpler", "more"}
 KIND_TASK = {
     "explain": "Explain the highlighted words in about two sentences.",
@@ -125,6 +135,8 @@ class Course:
         self.code = Path(code).resolve() if code else None
         self.claude = claude
         self.codex = codex
+        self.preflight = None  # (codex binary, its mtime, (ok, reason)): the last proof of the Codex profiles
+        self.preflight_lock = threading.Lock()
         self.web = list(web or [])
         self.git = shutil.which("git")
         self.log = self.ws / "questions.jsonl"
@@ -371,6 +383,11 @@ class Course:
         return result
 
     def ask(self, q, send, gone=lambda: False):
+        engine, why = self.resolve_engine(q.get("engine"))
+        if not engine:
+            send("error", {"message": why})
+            return
+        q["engine"] = engine
         kind = q.get("kind")
         if not isinstance(q.get("source"), dict):
             q["source"] = None
@@ -439,12 +456,146 @@ class Course:
         """The engines that can answer here, Claude first."""
         return [name for name, path in (("claude", self.claude), ("codex", self.codex)) if path]
 
+    def usable_engines(self):
+        """The installed engines that may run: Codex only while its preflight holds."""
+        return [e for e in self.engines() if e != "codex" or self.codex_ready()[0]]
+
     def engine_default(self):
-        """The course's chosen engine when it can answer here, else the first that can. Read from course.json each
+        """The course's chosen engine when it can run here, else the first that can. Read from course.json each
         time, so open_course.py --engine takes effect without a restart."""
-        engines = self.engines()
+        usable = self.usable_engines()
         chosen = self.settings().get("engine")
-        return chosen if chosen in engines else (engines[0] if engines else None)
+        return chosen if chosen in usable else (usable[0] if usable else None)
+
+    def resolve_engine(self, requested):
+        """(engine, None), or (None, why not). A named engine runs only if usable now, whatever asked for it."""
+        if requested:
+            if requested in self.usable_engines():
+                return requested, None
+            if requested == "codex":
+                return None, self.codex_ready()[1] if self.codex else "Codex is not installed on this computer."
+            return None, f"{requested} is not available on this computer."
+        engine = self.engine_default()
+        if engine:
+            return engine, None
+        return None, (self.codex_ready()[1] if self.codex else None) or "No engine is available on this computer."
+
+    # Codex: permission profiles, the commands that use them, and the preflight that proves them
+
+    def codex_bin(self):
+        """The resolved Codex binary. Its own file helper only runs under the profile when started from here, not
+        through a launcher link (seen with codex-cli 0.164.0)."""
+        return os.path.realpath(self.codex)
+
+    def codex_profile(self, kind):
+        """The -c value defining permission profile vt_ask or vt_teach, from this course's paths. Answers read the
+        course and its source folder; teaching also writes the course, except the protected files."""
+        rules = {":root": "deny", ":minimal": "read", ":tmpdir": "deny", ":slash_tmp": "deny",
+                 str(Path(self.codex_bin()).parent): "read", str(self.ws): "read"}
+        if self.code:
+            rules[str(self.code)] = "read"
+        if kind == "teach":
+            rules[str(SKILL)] = "read"
+            rules[str(self.ws)] = "write"
+            rules.update({str(self.ws / name): "read" for name in PROTECTED})
+            rules[str(self.ws / "assets" / "course.css")] = "write"
+        table = ", ".join(f"{json.dumps(path)} = {json.dumps(access)}" for path, access in rules.items())
+        return f"permissions.vt_{kind}={{filesystem={{{table}}}, network={{enabled = false}}}}"
+
+    def codex_command(self, kind, tier, session=None):
+        """A codex exec run under profile vt_<kind>, reading its prompt from stdin. Never --sandbox or --add-dir:
+        either switches the named profile off."""
+        model, effort = CODEX_TIERS[tier]
+        env = ", ".join(f"{k} = {json.dumps(os.environ[k])}" for k in CODEX_ENV if k in os.environ)
+        cmd = [self.codex_bin(), "exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
+               "-c", "project_doc_max_bytes=0", "-c", 'approval_policy="never"',
+               "-c", self.codex_profile(kind), "-c", f'default_permissions="vt_{kind}"',
+               *[arg for feature in CODEX_OFF for arg in ("--disable", feature)],
+               "-c", 'web_search="disabled"', "-c", 'shell_environment_policy.inherit="none"',
+               "-c", f"shell_environment_policy.set={{{env}}}",
+               "-m", model, "-c", f'model_reasoning_effort="{effort}"', "-C", str(self.ws)]
+        return cmd + (["resume", session] if session else []) + ["-"]
+
+    def codex_ready(self):
+        """(True, None) when Codex is signed in and its profiles hold on this computer, else (False, why). Proven
+        with codex sandbox, which runs a command under a profile without a model call. Run again whenever the
+        Codex binary changes, since an update moves the folder the profiles grant."""
+        with self.preflight_lock:
+            binary = self.codex_bin()
+            try:
+                mtime = os.stat(binary).st_mtime_ns
+            except OSError:
+                return False, "Codex is not installed on this computer."
+            if self.preflight and self.preflight[:2] == (binary, mtime):
+                return self.preflight[2]
+            result = self.run_preflight(binary)
+            self.preflight = (binary, mtime, result)
+            return result
+
+    def run_preflight(self, binary, report=None):
+        """The preflight itself. report(name, expected, exit code), when given, hears every probe instead of the
+        run stopping at the first failure: tests/probe_codex_sandbox.py uses it."""
+        try:
+            signed_in = subprocess.run([binary, "login", "status"], capture_output=True, timeout=20).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            signed_in = False
+        if not signed_in:
+            return False, "Codex is not signed in. Run codex login in a terminal, then open the course again."
+        tag = uuid.uuid4().hex[:8]
+        # The decoy sits beside the course, outside both temp folders, so it tests the deny on the whole disk.
+        decoy = self.ws.parent / f".visual-teach-probe-{tag}"
+        try:
+            decoy.mkdir()
+        except OSError:
+            decoy = Path(tempfile.mkdtemp(prefix="visual-teach-probe-"))
+        (decoy / "decoy.txt").write_text("decoy\n", encoding="utf-8")
+        lessons = self.ws / "lessons" if (self.ws / "lessons").is_dir() else self.ws
+        scratch = [self.ws / f".vt-probe-{tag}", lessons / f".vt-probe-{tag}.html",
+                   Path(tempfile.gettempdir()) / f"vt-probe-{tag}", Path("/tmp") / f"vt-probe-{tag}"]
+        course_json = self.ws / "course.json"
+        had_course_json = course_json.exists()
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        net = f"exec 3<>/dev/tcp/127.0.0.1/{port}"
+        q = shlex.quote
+        failed = None
+        # Each probe opens files without changing a byte, so a sandbox that wrongly allows it harms nothing.
+        probes = [("ask", "ask-read-course", "ok", "sh", f"ls {q(str(self.ws))}"),
+                  ("ask", "ask-read-outside", "deny", "sh", f"cat {q(str(decoy / 'decoy.txt'))}"),
+                  ("ask", "ask-write", "deny", "sh", f": >> {q(str(scratch[0]))}"),
+                  ("ask", "ask-network", "deny", "bash", net),
+                  ("teach", "teach-protected-write", "deny", "sh", f": >> {q(str(course_json))}"),
+                  ("teach", "teach-write-outside", "deny", "sh", f": > {q(str(decoy / 'new.txt'))}"),
+                  ("teach", "teach-write-tmp", "deny", "sh", f": > {q(str(scratch[2]))}"),
+                  ("teach", "teach-write-slash-tmp", "deny", "sh", f": > {q(str(scratch[3]))}"),
+                  ("teach", "teach-network", "deny", "bash", net),
+                  ("teach", "teach-write-lesson", "ok", "sh", f": > {q(str(scratch[1]))}")]
+        try:
+            for kind, name, expect, shell, command in probes:
+                cmd = [binary, "sandbox", "-C", str(self.ws), "-c", self.codex_profile(kind), "-P", f"vt_{kind}",
+                       "--", f"/bin/{shell}", "-c", f": vt-probe {name} {expect}; {command}"]
+                try:
+                    code = subprocess.run(cmd, cwd=self.ws, capture_output=True, timeout=30).returncode
+                except (OSError, subprocess.TimeoutExpired):
+                    code = None
+                if report:
+                    report(name, expect, code)
+                if (code == 0) != (expect == "ok") and not failed:
+                    what = "worked" if expect == "ok" else "was refused"
+                    failed = (f"Codex is off: its sandbox check {name} failed (it should have {what}). "
+                              "Run tests/probe_codex_sandbox.py in the visual-teach repo for details.")
+                    if not report:
+                        break
+            return (False, failed) if failed else (True, None)
+        finally:
+            listener.close()
+            for path in scratch:
+                path.unlink(missing_ok=True)
+            if not had_course_json and course_json.exists() and course_json.stat().st_size == 0:
+                course_json.unlink()
+            shutil.rmtree(decoy, ignore_errors=True)
 
     def teach_command(self):
         ws = rule_path(self.ws)
@@ -520,7 +671,7 @@ class Course:
             return code == 0, output.strip()[-3000:]
         return None, "Checks skipped: no Python with Playwright was found."
 
-    def start_job(self, action):
+    def start_job(self, action, engine="claude"):
         """Start a teaching job in the background. Returns an HTTP status and the job."""
         if not (SKILL / "SKILL.md").is_file():
             # A plugin update moved the skill and its old folder was deleted: no guard script, method or check.
@@ -844,8 +995,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json({"ok": True, "course": str(course.ws), "tiers": {k: v[0] for k, v in TIERS.items()},
                               "web": course.web, "code": str(course.code) if course.code else None,
                               "lan": bool(self.server.token), "pid": os.getpid(), "version": VERSION,
-                              "skill": str(SKILL), "engines": course.engines(),
-                              "engine_default": course.engine_default()})
+                              "skill": str(SKILL), "engines": course.usable_engines(),
+                              "engine_default": course.engine_default(),
+                              "codex_unavailable": course.codex_ready()[1] if course.codex else None})
         if url.path == "/api/threads":
             # keep_blank_values: the course home page is the lesson "", not a request for every lesson
             lesson = parse_qs(url.query, keep_blank_values=True).get("lesson", [None])[0]
@@ -925,7 +1077,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json({"ok": True})
             if body.get("action") not in TEACH_ACTIONS:
                 return self.send_error(400, "Unknown action")
-            status, job = course.start_job(body["action"])
+            engine, why = course.resolve_engine(body.get("engine"))
+            if not engine and body["action"] != "refresh":
+                return self.json({"error": why}, 409)
+            status, job = course.start_job(body["action"], engine)
             # A refusal carries its reason as JSON, so the page can say why instead of showing a status number.
             return self.json({"job": course.job_view()} if status == 200 else {"error": job}, status)
         if path != "/api/ask":
@@ -1023,6 +1178,9 @@ def main():
     if not shutil.which("claude") and not shutil.which("codex"):
         sys.exit("Neither claude nor codex is on PATH. Start this from the shell you use Claude Code or Codex in.")
     server = make_server(args.workspace, args.port, args.lan, args.code, None, args.web, quiet=False)
+    if server.course.codex:
+        ok, why = server.course.codex_ready()  # proven once before the page asks, so the first ping is quick
+        print("Codex is available." if ok else why, flush=True)
     ws = server.course.ws
     run = {"pid": os.getpid(), "port": args.port, "url": f"http://localhost:{args.port}/"}
     if args.lan:
