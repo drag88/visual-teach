@@ -3,6 +3,7 @@
 Usage: python3 test_serve.py
 """
 
+import hashlib
 import http.client
 import json
 import os
@@ -85,7 +86,41 @@ if argv[:1] == ["sandbox"]:
     if name in os.environ.get("FAKE_CODEX_LEAK", "").split(",") or expect == "ok":
         sys.exit(subprocess.run(argv[argv.index("--") + 1:]).returncode)
     sys.exit(1)
-record({"argv": argv, "stdin": sys.stdin.read()})
+stdin = sys.stdin.read()
+record({"argv": argv, "stdin": stdin})
+def out(obj):
+    print(json.dumps(obj), flush=True)
+resume = argv[argv.index("resume") + 1] if "resume" in argv else None
+if resume and os.environ.get("FAKE_CODEX_FAIL_RESUME"):
+    print("Error: thread not found", file=sys.stderr)
+    sys.exit(1)
+out({"type": "thread.started", "thread_id": resume or "thread-" + __import__("hashlib").md5(stdin.encode()).hexdigest()[:8]})
+out({"type": "turn.started"})
+if os.environ.get("FAKE_CODEX_COMMENTARY"):
+    out({"type": "item.completed", "item": {"id": "c", "type": "agent_message", "text": "Let me read the lesson first."}})
+cmd = "/bin/zsh -lc 'cat lessons/one.html'"
+out({"type": "item.started", "item": {"id": "x", "type": "command_execution", "command": cmd, "status": "in_progress"}})
+out({"type": "item.completed", "item": {"id": "x", "type": "command_execution", "command": cmd, "exit_code": 0,
+                                        "aggregated_output": "<p>x</p>", "status": "completed"}})
+for spec in filter(None, os.environ.get("FAKE_CODEX_WRITE", "").split(";")):
+    target, _, content = spec.partition("=")  # a write that got past the sandbox, or a lesson edit
+    if content == "<delete>":
+        os.unlink(target)
+    else:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w") as f:
+            f.write(content)
+    out({"type": "item.completed", "item": {"id": "f", "type": "file_change", "status": "completed",
+                                            "changes": [{"path": target, "kind": "update"}]}})
+if os.environ.get("FAKE_CODEX_SLOW"):
+    import time
+    time.sleep(3)
+if os.environ.get("FAKE_CODEX_TURN_FAILED"):
+    out({"type": "turn.failed", "error": {"message": "You've hit your usage limit."}})
+    sys.exit(1)
+out({"type": "item.completed", "item": {"id": "m", "type": "agent_message",
+                                        "text": os.environ.get("FAKE_CODEX_TEXT", "Codex says the runner hands out jobs. (¶2)")}})
+out({"type": "turn.completed", "usage": {"input_tokens": 1200, "cached_input_tokens": 0, "output_tokens": 34}})
 '''
 
 
@@ -273,7 +308,10 @@ class CodexPreflightTest(unittest.TestCase):
         self.assertIn("ask-read-outside", error)
 
 
-class ServeTest(unittest.TestCase):
+class ServerCase(unittest.TestCase):
+    """A course served with a fake claude, and a fake codex when codex_engine is set. Helpers only, no tests."""
+    codex_engine = False
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
@@ -296,11 +334,17 @@ class ServeTest(unittest.TestCase):
                   "FAKE_CLAUDE_IS_ERROR", "FAKE_TEXT"):
             os.environ.pop(k, None)
         self.claude = str(fake)
+        self.codex_log = base / "codex.log"
+        os.environ["FAKE_CODEX_LOG"] = str(self.codex_log)
+        for k in ("FAKE_CODEX_LEAK", "FAKE_CODEX_LOGGED_OUT", "FAKE_CODEX_TEXT", "FAKE_CODEX_COMMENTARY",
+                  "FAKE_CODEX_FAIL_RESUME", "FAKE_CODEX_TURN_FAILED", "FAKE_CODEX_SLOW", "FAKE_CODEX_WRITE"):
+            os.environ.pop(k, None)
+        self.codex = fake_codex(bindir) if self.codex_engine else ""
         self.start()
 
     def start(self, lan=False):
         self.server = serve.make_server(self.ws, port=0, lan=lan, code=self.code, claude=self.claude,
-                                        web=["docs.example.org", "github.com"], codex="")
+                                        web=["docs.example.org", "github.com"], codex=self.codex)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -343,6 +387,128 @@ class ServeTest(unittest.TestCase):
 
     def records(self):
         return [json.loads(line) for line in (self.ws / "questions.jsonl").read_text().splitlines()]
+
+    def codex_calls(self):
+        lines = self.codex_log.read_text().splitlines() if self.codex_log.exists() else []
+        return [c for c in map(json.loads, lines) if "argv" in c and c["argv"][:1] != ["sandbox"]]
+
+
+class CodexAnswerTest(ServerCase):
+    """Answers, follow-ups and checks on Codex, through the same endpoints the page uses."""
+    codex_engine = True
+
+    def test_explain_on_codex_streams_one_answer_with_tokens(self):
+        resp, events = self.ask(kind="explain", engine="codex")
+        names = [e for e, _ in events]
+        self.assertEqual(names[0], "thread")
+        self.assertIn("status", names)
+        deltas = [d["text"] for e, d in events if e == "delta"]
+        self.assertEqual(deltas, ["Codex says the runner hands out jobs. (¶2)"], "one whole answer")
+        done = events[-1][1]
+        self.assertEqual(events[-1][0], "done")
+        self.assertEqual((done["model"], done["tokens"], done["engine"]), ("gpt-6-luna", 1234, "codex"))
+        self.assertIsNone(done["cost_usd"])
+        call = self.codex_calls()[-1]
+        self.assertIn("vt_ask", " ".join(call["argv"]))
+        self.assertIn("Explain the highlighted words", call["stdin"])
+        self.assertIn("Never suggest you changed a file", call["stdin"], "a new session carries the system prompt")
+        user, assistant = self.records()
+        self.assertEqual((assistant["engine"], assistant["session"]), ("codex", call_thread(self.codex_calls())))
+        self.assertEqual(assistant["text"], "Codex says the runner hands out jobs. (¶2)")
+
+    def test_commentary_is_status_and_only_the_last_message_is_the_answer(self):
+        os.environ["FAKE_CODEX_COMMENTARY"] = "1"
+        _, events = self.ask(engine="codex")
+        self.assertIn(("status", {"text": "Let me read the lesson first."}), events)
+        self.assertEqual([d["text"] for e, d in events if e == "delta"], ["Codex says the runner hands out jobs. (¶2)"])
+        self.assertEqual(self.records()[-1]["text"], "Codex says the runner hands out jobs. (¶2)")
+
+    def test_follow_up_on_codex_resumes_its_thread(self):
+        _, events = self.ask(engine="codex")
+        thread = events[0][1]["thread"]
+        first = self.records()[-1]["session"]
+        self.ask(engine="codex", thread=thread, question="And then?")
+        argv = self.codex_calls()[-1]["argv"]
+        self.assertEqual(argv[-3:], ["resume", first, "-"])
+        self.assertNotIn("Never suggest you changed a file", self.codex_calls()[-1]["stdin"])
+
+    def test_switching_engine_mid_thread_starts_fresh_with_the_thread_inlined(self):
+        _, events = self.ask()  # Claude, the default
+        thread = events[0][1]["thread"]
+        self.ask(engine="codex", thread=thread, question="And then?")
+        call = self.codex_calls()[-1]
+        self.assertNotIn("resume", call["argv"])
+        self.assertIn("The conversation so far", call["stdin"])
+        self.assertIn("The runner is the office manager", call["stdin"])
+        _, events = self.ask(thread=thread, engine="claude", question="Back to Claude?")
+        claude_argv = self.calls()[-1]["argv"]
+        self.assertNotIn("--resume", claude_argv, "a Codex session id is never handed to Claude")
+
+    def test_old_log_lines_without_an_engine_are_claude_sessions(self):
+        (self.ws / "questions.jsonl").write_text(
+            json.dumps({"thread": "t1", "role": "user", "lesson": "lessons/one.html", "kind": "ask", "text": "q"}) + "\n"
+            + json.dumps({"thread": "t1", "role": "assistant", "session": "s-old", "text": "a"}) + "\n")
+        self.ask(thread="t1", question="More?")
+        self.assertEqual(self.calls()[-1]["argv"][-2:], ["--resume", "s-old"])
+
+    def test_deep_uses_sol_and_quick_kinds_stay_quick(self):
+        self.ask(engine="codex", mode="deep")
+        self.assertIn("gpt-6.1-sol", self.codex_calls()[-1]["argv"])
+        self.ask(engine="codex", mode="deep", kind="explain")
+        self.assertIn("gpt-6-luna", self.codex_calls()[-1]["argv"])
+
+    def test_codex_answers_get_no_web(self):
+        self.ask(engine="codex", mode="deep")
+        argv = self.codex_calls()[-1]["argv"]
+        self.assertIn('web_search="disabled"', argv)
+        self.assertNotIn("docs.example.org", " ".join(argv))
+
+    def test_a_failed_turn_reaches_the_page(self):
+        os.environ["FAKE_CODEX_TURN_FAILED"] = "1"
+        _, events = self.ask(engine="codex")
+        self.assertEqual(events[-1][0], "error")
+        self.assertIn("usage limit", events[-1][1]["message"])
+        self.assertEqual([e for e, _ in events if e == "delta"], [])
+
+    def test_a_lost_codex_session_starts_again_with_the_thread_inlined(self):
+        _, events = self.ask(engine="codex")
+        thread = events[0][1]["thread"]
+        os.environ["FAKE_CODEX_FAIL_RESUME"] = "1"
+        _, events = self.ask(engine="codex", thread=thread, question="And then?")
+        self.assertEqual(events[-1][0], "done")
+        self.assertIn("The conversation so far", self.codex_calls()[-1]["stdin"])
+
+    def test_check_my_answer_runs_on_codex(self):
+        _, events = self.ask(engine="codex", kind="check", quiz="q1", question="What is X?", answer="Y", model="Z")
+        self.assertEqual(events[-1][0], "done")
+        self.assertIn("Learner's answer: Y", self.codex_calls()[-1]["stdin"])
+
+    def test_closing_the_card_stops_codex(self):
+        os.environ["FAKE_CODEX_SLOW"] = "1"
+        body = json.dumps({"kind": "ask", "mode": "quick", "lesson": "lessons/one.html", "question": "Slow one",
+                           "engine": "codex"}).encode()
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=10)
+        sock.sendall(f"POST /api/ask HTTP/1.1\r\nHost: localhost:{self.port}\r\nContent-Type: application/json\r\n"
+                     f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+        seen = b""
+        while b"event: status" not in seen:
+            seen += sock.recv(4096)
+        sock.close()
+        time.sleep(4)
+        self.assertFalse(any(r["role"] == "assistant" for r in self.records()), "codex kept running after the reader left")
+
+    def test_a_missing_codex_binary_is_reported(self):
+        self.server.course.codex_ready()
+        self.server.course.codex = str(Path(self.tmp.name) / "gone" / "codex")
+        _, events = self.ask(engine="codex")
+        self.assertEqual(events[-1][0], "error")
+
+
+def call_thread(calls):
+    return "thread-" + hashlib.md5(calls[-1]["stdin"].encode()).hexdigest()[:8]
+
+
+class ServeTest(ServerCase):
 
     def test_streams_status_then_deltas_then_done(self):
         resp, events = self.ask()

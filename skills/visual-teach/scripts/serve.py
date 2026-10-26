@@ -115,7 +115,7 @@ def failure(result):
         return None
     if result["returncode"] < 0:  # ended by a signal: a stop from the page, or the server stopping
         return "It was stopped before it finished."
-    return result["stderr"][-300:] or f"claude exited {result['returncode']}"
+    return result["stderr"][-300:] or f"{result.get('engine', 'claude')} exited {result['returncode']}"
 
 
 def read_dict(path):
@@ -180,8 +180,10 @@ class Course:
         return out
 
     def last_session(self, thread):
-        sessions = [r["session"] for r in self.records() if r.get("thread") == thread and r.get("session")]
-        return sessions[-1] if sessions else None
+        """(session, engine) of the thread's last answer, or (None, None). Lines from before engines were
+        recorded are Claude's."""
+        answers = [r for r in self.records() if r.get("thread") == thread and r.get("session")]
+        return (answers[-1]["session"], answers[-1].get("engine", "claude")) if answers else (None, None)
 
     def history(self, thread):
         lines = []
@@ -315,8 +317,9 @@ class Course:
 
     # Running Claude
 
-    def run(self, cmd, prompt, send, gone):
-        """Stream one Claude run through send(event, data). Returns a result dict, or None if the reader left."""
+    def run(self, cmd, prompt, send, gone, engine="claude"):
+        """Stream one Claude or Codex run through send(event, data). Returns a result dict, or None if the reader
+        left."""
         started = time.time()
         try:
             proc = subprocess.Popen(cmd, cwd=self.ws, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -324,8 +327,8 @@ class Course:
                                     env=self.claude_env(), start_new_session=True)
         except OSError as exc:
             self.forget_files(cmd)
-            return {"text": "", "model": None, "cost_usd": None, "ms_first_word": None, "returncode": 127,
-                    "stderr": "", "error": f"Could not start claude: {exc}", "ms_total": 0}
+            return {"text": "", "model": None, "cost_usd": None, "tokens": None, "ms_first_word": None,
+                    "returncode": 127, "stderr": "", "error": f"Could not start {engine}: {exc}", "ms_total": 0}
         err = []
         with self.lock:
             self.live.add(proc)
@@ -339,12 +342,18 @@ class Course:
             proc.stdin.close()
         except BrokenPipeError:
             pass  # claude exited at once; its return code and stderr say why
-        result = {"text": "", "model": None, "cost_usd": None, "ms_first_word": None}
+        result = {"text": "", "model": None, "cost_usd": None, "tokens": None, "ms_first_word": None}
+        if engine == "codex":
+            result["model"] = cmd[cmd.index("-m") + 1]  # Codex does not report it
+            parse = self.codex_event(result, send, started)
         try:
             for line in proc.stdout:
                 try:
                     ev = json.loads(line)
                 except ValueError:
+                    continue
+                if engine == "codex":
+                    parse(ev)
                     continue
                 kind = ev.get("type")
                 if kind == "system" and ev.get("subtype") == "init":
@@ -378,9 +387,49 @@ class Course:
         if gone():
             return None
         result["returncode"] = proc.returncode
+        result["engine"] = engine
         result["stderr"] = "".join(err).strip()
         result["ms_total"] = int((time.time() - started) * 1000)
         return result
+
+    def codex_event(self, result, send, started):
+        """A parser for one Codex run's JSON events, filling result and sending page events. Only the last message
+        of a turn is the answer, sent once the turn completes; earlier ones were commentary and become steps."""
+        pending = []
+
+        def parse(ev):
+            kind, item = ev.get("type"), ev.get("item") or {}
+            if kind == "thread.started":
+                result["session"] = ev.get("thread_id")
+            elif kind == "item.started" and item.get("type") == "command_execution":
+                send("status", {"text": self.describe_command(item.get("command") or "")})
+            elif kind == "item.completed" and item.get("type") == "file_change":
+                for change in item.get("changes") or []:
+                    send("status", {"text": f"Editing {self.short(change.get('path', ''))}"})
+            elif kind == "item.completed" and item.get("type") == "agent_message":
+                if pending:
+                    send("status", {"text": pending.pop().strip().splitlines()[0][:120]})
+                pending.append(item.get("text") or "")
+            elif kind == "turn.completed":
+                usage = ev.get("usage") or {}
+                result["tokens"] = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+                if pending:
+                    result["text"] = pending.pop()
+                    result["ms_first_word"] = int((time.time() - started) * 1000)
+                    send("delta", {"text": result["text"]})
+            elif kind in ("turn.failed", "error"):
+                error = ev.get("error") if isinstance(ev.get("error"), dict) else ev
+                result["error"] = str(error.get("message") or "Codex reported an error")
+        return parse
+
+    def describe_command(self, command):
+        """One short line for a Codex shell command: the inner command, paths relative, clipped."""
+        m = re.match(r"^\S*sh -l?c (['\"])(.*)\1$", command, re.S)
+        inner = m.group(2) if m else command
+        for root in (self.code, self.ws):
+            if root:
+                inner = inner.replace(str(root) + os.sep, "")
+        return f"Running {inner if len(inner) <= 60 else inner[:59] + '…'}"
 
     def ask(self, q, send, gone=lambda: False):
         engine, why = self.resolve_engine(q.get("engine"))
@@ -393,7 +442,9 @@ class Course:
             q["source"] = None
         tier = "quick" if kind in ALWAYS_QUICK else (q.get("mode") if q.get("mode") in TIERS else "quick")
         thread = q.get("thread")
-        session = self.last_session(thread) if thread else None
+        session, session_engine = self.last_session(thread) if thread else (None, None)
+        if session_engine != engine:
+            session = None  # a session belongs to the engine that made it; the thread so far is inlined instead
         follow_up = bool(thread)
         thread = thread or str(uuid.uuid4())
         send("thread", {"thread": thread})
@@ -419,31 +470,43 @@ class Course:
             record["quiz"] = q.get("quiz")
         self.append(record)
 
+        engine = q["engine"]
         resumed = bool(session)
-        session = session or str(uuid.uuid4())
         if follow_up and not resumed:
-            # No Claude session was saved for this thread (its first answer never finished), so the new one is
-            # handed what was asked.
+            # No session of this engine was saved for this thread (its first answer never finished, or the
+            # learner switched engines), so the new one is handed what was asked.
             prompt = f"The conversation so far:\n\n{history}\n\n{prompt}"
-        result = self.run(self.command(tier, session, resumed), prompt, send, gone)
+        result, session = self.answer_run(engine, tier, session, resumed, prompt, send, gone)
         if result is None:
             return
         if resumed and result["returncode"] != 0 and not result["text"]:
-            # The saved Claude session is gone; start a new one and hand it the thread so far.
-            session = str(uuid.uuid4())
+            # The saved session is gone; start a new one and hand it the thread so far.
             prompt = f"The conversation so far:\n\n{history}\n\n{prompt}"
-            result = self.run(self.command(tier, session, False), prompt, send, gone)
+            result, session = self.answer_run(engine, tier, None, False, prompt, send, gone)
             if result is None:
                 return
         message = failure(result)
         if message:
             send("error", {"message": message})
             return
-        self.append({"t": now(), "thread": thread, "role": "assistant", "session": session,
-                     "model": result["model"], "cost_usd": result["cost_usd"],
+        self.append({"t": now(), "thread": thread, "role": "assistant", "engine": engine, "session": session,
+                     "model": result["model"], "cost_usd": result["cost_usd"], "tokens": result["tokens"],
                      "ms_first_word": result["ms_first_word"], "text": result["text"]})
-        send("done", {"thread": thread, "model": result["model"], "cost_usd": result["cost_usd"],
-                      "ms_first_word": result["ms_first_word"], "ms_total": result["ms_total"]})
+        send("done", {"thread": thread, "engine": engine, "model": result["model"], "cost_usd": result["cost_usd"],
+                      "tokens": result["tokens"], "ms_first_word": result["ms_first_word"],
+                      "ms_total": result["ms_total"]})
+
+    def answer_run(self, engine, tier, session, resumed, prompt, send, gone):
+        """One answer run on either engine. Returns (result, the session it made or continued). Claude takes a
+        session id we choose; Codex names its own thread, reported as the result's session."""
+        if engine == "codex":
+            if not resumed:
+                prompt = f"{self.system_prompt()}\n\n---\n\n{prompt}"  # Codex has no flag for a system prompt
+            result = self.run(self.codex_command("ask", tier, session if resumed else None), prompt, send, gone,
+                              engine="codex")
+            return result, (result or {}).get("session") or session
+        session = session or str(uuid.uuid4())
+        return self.run(self.command(tier, session, resumed), prompt, send, gone), session
 
     # Teaching from the course page
 
