@@ -97,7 +97,7 @@ if resume and os.environ.get("FAKE_CODEX_FAIL_RESUME"):
 out({"type": "thread.started", "thread_id": resume or "thread-" + __import__("hashlib").md5(stdin.encode()).hexdigest()[:8]})
 out({"type": "turn.started"})
 if os.environ.get("FAKE_CODEX_COMMENTARY"):
-    out({"type": "item.completed", "item": {"id": "c", "type": "agent_message", "text": "Let me read the lesson first."}})
+    out({"type": "item.completed", "item": {"id": "c", "type": "agent_message", "text": os.environ["FAKE_CODEX_COMMENTARY"]}})
 cmd = "/bin/zsh -lc 'cat lessons/one.html'"
 out({"type": "item.started", "item": {"id": "x", "type": "command_execution", "command": cmd, "status": "in_progress"}})
 out({"type": "item.completed", "item": {"id": "x", "type": "command_execution", "command": cmd, "exit_code": 0,
@@ -284,6 +284,12 @@ class CodexPreflightTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("codex login", reason)
 
+    def test_signing_in_is_noticed_without_a_restart(self):
+        os.environ["FAKE_CODEX_LOGGED_OUT"] = "1"
+        self.assertFalse(self.course.codex_ready()[0])
+        os.environ.pop("FAKE_CODEX_LOGGED_OUT")
+        self.assertEqual(self.course.codex_ready(), (True, None))
+
     def test_a_changed_codex_binary_is_probed_again(self):
         self.course.codex_ready()
         self.course.codex_ready()
@@ -432,9 +438,12 @@ class CodexAnswerTest(ServerCase):
         self.assertEqual(assistant["text"], "Codex says the runner hands out jobs. (¶2)")
 
     def test_commentary_is_status_and_only_the_last_message_is_the_answer(self):
-        os.environ["FAKE_CODEX_COMMENTARY"] = "1"
+        os.environ["FAKE_CODEX_COMMENTARY"] = "Let me read the lesson first."
         _, events = self.ask(engine="codex")
         self.assertIn(("status", {"text": "Let me read the lesson first."}), events)
+        os.environ["FAKE_CODEX_COMMENTARY"] = "  \n "
+        _, events = self.ask(engine="codex")
+        self.assertEqual(events[-1][0], "done", "an empty commentary message is skipped, not a crash")
         self.assertEqual([d["text"] for e, d in events if e == "delta"], ["Codex says the runner hands out jobs. (¶2)"])
         self.assertEqual(self.records()[-1]["text"], "Codex says the runner hands out jobs. (¶2)")
 

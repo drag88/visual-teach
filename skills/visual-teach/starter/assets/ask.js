@@ -20,6 +20,7 @@
   let engines = [];
   let engine = null;
   let engineNote = ""; // why Codex is not offered, or why nothing can answer
+  const ENGINE_LABEL = { claude: "Claude", codex: "Codex" };
   let code = null; // the source folder answers may read, from ping
 
   const blocks = [...main.children].filter((el) => !el.matches(SKIP));
@@ -284,17 +285,14 @@
       pick.setAttribute("role", "group");
       pick.setAttribute("aria-label", "Answer engine");
       for (const e of engines) {
-        const b = node("button");
-        b.type = "button";
-        b.dataset.engine = e;
-        b.textContent = e === "codex" ? "Codex" : "Claude";
-        b.setAttribute("aria-pressed", String(e === engine));
-        b.addEventListener("click", () => {
+        const b = button(ENGINE_LABEL[e], () => {
           engine = e;
           store("vt-engine", e);
           pick.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.engine === e)));
           if (teach) renderTeach(teach.job);
         });
+        b.dataset.engine = e;
+        b.setAttribute("aria-pressed", String(e === engine));
         pick.append(b);
       }
       parts.push(pick);
@@ -912,9 +910,9 @@
       if (job.state === "done") after.append(Object.assign(node("a"), { href: location.href.split("#")[0], textContent: "Reload to see the changes" }));
       if (after.children.length) panel.append(after);
     } else {
-      panel.append(textLine("ask-teach-note", (engine === "codex" ? "Runs a session with Codex (GPT-6.1 Sol)"
-        : engine ? "Runs a session with Claude (Opus)" : engineNote) + (engine ? " in this course's folder. "
-        + "It takes 5 to 15 minutes and carries on if you close the page." : "")));
+      const who = { claude: "Claude (Opus)", codex: "Codex (GPT-6.1 Sol)" }[engine];
+      panel.append(textLine("ask-teach-note", who ? `Runs a session with ${who} in this course's folder. `
+        + "It takes 5 to 15 minutes and carries on if you close the page." : engineNote));
     }
     const actions = node("div", "ask-teach-actions");
     for (const action of ["next", "update", ...(teach.refresh ? ["refresh"] : [])]) {
@@ -1088,7 +1086,7 @@
   }
 
   function engineName(e) {
-    return engines.length > 1 && e ? (e === "codex" ? "Codex" : "Claude") : "";
+    return engines.length > 1 && e ? ENGINE_LABEL[e] : "";
   }
 
   function esc(s) {

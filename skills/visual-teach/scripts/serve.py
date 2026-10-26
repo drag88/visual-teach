@@ -48,6 +48,7 @@ CODEX_OFF = ("hooks", "memories", "multi_agent", "plugins", "apps", "browser_use
 # The only environment a Codex shell command sees: enough to run tools, nothing that could hold a secret.
 CODEX_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE", "SSL_CERT_DIR")
 # Files a teaching session may read but never change (scripts/teach_guard.py keeps the Claude side to the same list).
+SIGN_IN = "Codex is not signed in. Run codex login in a terminal, then reload this page."
 PROTECTED = ("course.json", ".serve.json", "CLAUDE.md", "AGENTS.md", ".claude", ".codex", "assets")
 ALWAYS_QUICK = {"explain", "simpler", "more"}
 KIND_TASK = {
@@ -135,7 +136,7 @@ class Course:
         self.code = Path(code).resolve() if code else None
         self.claude = claude
         self.codex = codex
-        self.preflight = None  # (codex binary, its mtime, (ok, reason)): the last proof of the Codex profiles
+        self.preflight = None  # (codex binary, its mtime, (ok, reason), signed out): the last proof of the profiles
         self.preflight_lock = threading.Lock()
         self.web = list(web or [])
         self.git = shutil.which("git")
@@ -407,8 +408,9 @@ class Course:
                 for change in item.get("changes") or []:
                     send("status", {"text": f"Editing {self.short(change.get('path', ''))}"})
             elif kind == "item.completed" and item.get("type") == "agent_message":
-                if pending:
-                    send("status", {"text": pending.pop().strip().splitlines()[0][:120]})
+                said = pending.pop().strip() if pending else ""
+                if said:
+                    send("status", {"text": said.splitlines()[0][:120]})
                 pending.append(item.get("text") or "")
             elif kind == "turn.completed":
                 usage = ev.get("usage") or {}
@@ -426,6 +428,7 @@ class Course:
         """One short line for a Codex shell command: the inner command, paths relative, clipped."""
         m = re.match(r"^\S*sh -l?c (['\"])(.*)\1$", command, re.S)
         inner = m.group(2) if m else command
+        inner = inner.replace(str(SKILL) + os.sep, "skill/")
         for root in (self.code, self.ws):
             if root:
                 inner = inner.replace(str(root) + os.sep, "")
@@ -523,10 +526,10 @@ class Course:
         """The installed engines that may run: Codex only while its preflight holds."""
         return [e for e in self.engines() if e != "codex" or self.codex_ready()[0]]
 
-    def engine_default(self):
+    def engine_default(self, usable=None):
         """The course's chosen engine when it can run here, else the first that can. Read from course.json each
         time, so open_course.py --engine takes effect without a restart."""
-        usable = self.usable_engines()
+        usable = self.usable_engines() if usable is None else usable
         chosen = self.settings().get("engine")
         return chosen if chosen in usable else (usable[0] if usable else None)
 
@@ -536,12 +539,16 @@ class Course:
             if requested in self.usable_engines():
                 return requested, None
             if requested == "codex":
-                return None, self.codex_ready()[1] if self.codex else "Codex is not installed on this computer."
+                return None, self.codex_why() or "Codex is not installed on this computer."
             return None, f"{requested} is not available on this computer."
         engine = self.engine_default()
         if engine:
             return engine, None
-        return None, (self.codex_ready()[1] if self.codex else None) or "No engine is available on this computer."
+        return None, self.codex_why() or "No engine is available on this computer."
+
+    def codex_why(self):
+        """Why Codex is not offered, or None when it is or is not installed."""
+        return self.codex_ready()[1] if self.codex else None
 
     # Codex: permission profiles, the commands that use them, and the preflight that proves them
 
@@ -589,10 +596,11 @@ class Course:
                 mtime = os.stat(binary).st_mtime_ns
             except OSError:
                 return False, "Codex is not installed on this computer."
-            if self.preflight and self.preflight[:2] == (binary, mtime):
+            # A failed sign-in is not kept: `codex login` changes nothing the cache keys on.
+            if self.preflight and self.preflight[:2] == (binary, mtime) and not self.preflight[3]:
                 return self.preflight[2]
             result = self.run_preflight(binary)
-            self.preflight = (binary, mtime, result)
+            self.preflight = (binary, mtime, result, result[1] == SIGN_IN)
             return result
 
     def run_preflight(self, binary, report=None):
@@ -603,7 +611,7 @@ class Course:
         except (OSError, subprocess.TimeoutExpired):
             signed_in = False
         if not signed_in:
-            return False, "Codex is not signed in. Run codex login in a terminal, then open the course again."
+            return False, SIGN_IN
         tag = uuid.uuid4().hex[:8]
         # The decoy sits beside the course, outside both temp folders, so it tests the deny on the whole disk.
         decoy = self.ws.parent / f".visual-teach-probe-{tag}"
@@ -1104,12 +1112,12 @@ class Handler(SimpleHTTPRequestHandler):
         url = urlparse(self.path)
         course = self.course
         if url.path == "/api/ping":
+            usable = course.usable_engines()
             return self.json({"ok": True, "course": str(course.ws), "tiers": {k: v[0] for k, v in TIERS.items()},
                               "web": course.web, "code": str(course.code) if course.code else None,
                               "lan": bool(self.server.token), "pid": os.getpid(), "version": VERSION,
-                              "skill": str(SKILL), "engines": course.usable_engines(),
-                              "engine_default": course.engine_default(),
-                              "codex_unavailable": course.codex_ready()[1] if course.codex else None})
+                              "skill": str(SKILL), "engines": usable, "engine_default": course.engine_default(usable),
+                              "codex_unavailable": course.codex_why()})
         if url.path == "/api/threads":
             # keep_blank_values: the course home page is the lesson "", not a request for every lesson
             lesson = parse_qs(url.query, keep_blank_values=True).get("lesson", [None])[0]
@@ -1189,9 +1197,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json({"ok": True})
             if body.get("action") not in TEACH_ACTIONS:
                 return self.send_error(400, "Unknown action")
-            engine, why = course.resolve_engine(body.get("engine"))
-            if not engine and body["action"] != "refresh":
-                return self.json({"error": why}, 409)
+            engine = None  # refresh runs the course's own command, no engine
+            if body["action"] != "refresh":
+                engine, why = course.resolve_engine(body.get("engine"))
+                if not engine:
+                    return self.json({"error": why}, 409)
             status, job = course.start_job(body["action"], engine)
             # A refusal carries its reason as JSON, so the page can say why instead of showing a status number.
             return self.json({"job": course.job_view()} if status == 200 else {"error": job}, status)

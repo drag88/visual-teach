@@ -42,11 +42,7 @@ def scratch_root():
 
 def run_codex(course, kind, prompt, session=None):
     """Events from one cheap codex exec run under the server's own command for that profile."""
-    cmd = course.codex_command(kind, "quick", session)
-    model = cmd.index("-m")
-    cmd[model + 1] = CHEAP[0]
-    cmd[cmd.index(f'model_reasoning_effort="{serve.CODEX_TIERS["quick"][1]}"')] = f'model_reasoning_effort="{CHEAP[1]}"'
-    done = subprocess.run(cmd, input=prompt, capture_output=True, text=True, cwd=course.ws, timeout=300,
+    done = subprocess.run(course.codex_command(kind, "quick", session), input=prompt, capture_output=True, text=True, cwd=course.ws, timeout=300,
                           env=dict(os.environ, VT_PROBE_SECRET="hunter2-probe"))
     events = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
     return events
@@ -60,6 +56,7 @@ def main():
     codex = shutil.which("codex")
     if not codex:
         sys.exit("codex is not on PATH.")
+    serve.CODEX_TIERS["quick"] = CHEAP  # the probes need the sandbox, not a good answer
     root = scratch_root()
     ws, outside = root / "course", root / "outside"
     problems = []
