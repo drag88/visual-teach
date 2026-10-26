@@ -54,7 +54,7 @@ visual-teach builds courses from either Claude Code or Codex, but everything aft
 
 - R9. Before offering Codex, the server checks that Codex is signed in and runs a token-free preflight under the same profiles: under the ask profile, a read of a decoy outside the course, any write and a network connection must fail, and a read inside must work; under the teach profile, a write to a protected course file, a write outside the course, a write to a temp folder and a network connection must fail, and a write to a lesson must work. No probe may change a real course file even if the sandbox wrongly allows it. Codex is offered only when all of these hold, and the page says why when it is not.
 - R10. A Teach session on Codex may edit only the files a Claude Teach session may edit (the property `.claude/skills/verify-teach-guard` checks), may not use the network, and may not write to temp folders.
-- R11. After every Codex Teach session, the server compares the protected course files (those in R10, plus `.codex/`) with their state before the session. Any change is reverted, the job fails, and the page says which file was touched.
+- R11. Dropped during the build (26 Oct 2026): the after-session restore of protected files. Review found it only acted once the sandbox had already failed, and each fix to it added risk of its own. The teach profile (R10), proven by the preflight (R9), is the boundary.
 - R12. Codex runs never load the learner's own Codex config, rules, hooks, MCP servers, memories or `AGENTS.md`, nor any Codex config inside the course folder.
 
 **Teach on Codex**
@@ -108,7 +108,7 @@ All verified on this Mac with codex-cli 0.164.0.
 
 - KTD1. **Permission profiles, never `--sandbox`.** Every Codex run selects a named profile through `default_permissions` set with `-c` overrides, and never passes `--sandbox` or `--add-dir`, which would switch the profile off. Profiles are built per run from the course and `--code` paths, so nothing is written into the course folder.
 - KTD2. **Two profiles: ask and teach.** Ask: deny `:root`, read `:minimal`, read the course, read `--code` and the resolved Codex executable, no network. The skill folder stays unreadable to answers, as it is for Claude answers today. Teach: the ask grants, plus read on the skill folder (the session follows `SKILL.md`, as Claude's Teach does through `--add-dir`) and write on the course, with `course.json`, `.serve.json`, `CLAUDE.md`, `AGENTS.md`, `.claude/`, `.codex/` and `assets/` (except `assets/course.css`) kept read-only, and `:tmpdir` and `:slash_tmp` denied.
-- KTD3. **The profile is the boundary; the after-check catches drift.** Codex hooks can fail open and get patches in a different shape, so `teach_guard.py` is not wired into Codex. The server's before/after comparison of protected files (R11) catches a profile regression, such as a beta change in Codex, without being relied on to prevent one. The snapshot is taken after `sync_course` runs and right before the Codex run, so the server's own asset updates are never mistaken for Codex's. The comparison runs on every exit: done, failed, stopped or raised.
+- KTD3. **The profile is the boundary.** Codex hooks can fail open and get patches in a different shape, so `teach_guard.py` is not wired into Codex, and the planned after-check (R11) was dropped: the preflight proves the profile at every server start and whenever Codex changes, and keeps Codex off when it cannot.
 - KTD4. **Preflight with `codex sandbox`, not a model call.** The R9 probes cost no tokens and take well under a second. They run at server start and again before any Codex run whose resolved executable path or modification time differs from the one last probed, since a Codex update moves the executable the profiles grant. The result goes in `/api/ping`. The protected-write probe opens `course.json` for append and writes nothing, and the lesson-write probe uses a uniquely named scratch file it removes, so a wrongly permissive sandbox changes no course content.
 - KTD5. **The engine travels with each thread.** `questions.jsonl` assistant lines gain an `engine` field next to `session`. A follow-up resumes only a session made by the same engine. Otherwise it starts fresh with the thread inlined, reusing the path that already handles a lost Claude session (`Course.answer`). Lines without the field are Claude's.
 - KTD6. **Codex models.** Quick runs `gpt-6-luna` with low effort, Deep runs `gpt-6.1-sol` with medium effort, both set through `-m` and `-c model_reasoning_effort=`. Explain, Simpler and More stay Quick, as on Claude. Teach runs Deep. Effort can rise after answers have been read (deferred).
@@ -286,7 +286,7 @@ flowchart TB
 
 ### U4. Teach on Codex
 
-**Goal:** the three Teach actions run on Codex inside the teach profile, with the after-check.
+**Goal:** the three Teach actions run on Codex inside the teach profile. (The after-check steps below were dropped with R11.)
 
 **Requirements:** R10, R11, R13, R14.
 

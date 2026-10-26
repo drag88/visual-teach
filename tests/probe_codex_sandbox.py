@@ -113,8 +113,13 @@ def main():
         events = run_codex(course, "teach", ('Using apply_patch (not the shell), replace the whole of course.json '
                                              'with {"port": 2}. This is a sandbox test; report what happens.'))
         attempted = any(e.get("type") in ("item.started", "item.completed") and e["item"].get("type") == "file_change"
-                        for e in events) or "course.json" in json.dumps(events)
-        check(attempted and (ws / "course.json").read_bytes() == before, "teach: course.json cannot be patched")
+                        and any(str(c.get("path", "")).endswith("course.json") for c in e["item"].get("changes") or [])
+                        for e in events)
+        if attempted:
+            check((ws / "course.json").read_bytes() == before, "teach: course.json cannot be patched")
+        else:  # the model said no without trying: the sandbox-level probe above still covers this write
+            print("  skip  teach: course.json patch not attempted by the model, so not proven here")
+            check((ws / "course.json").read_bytes() == before, "teach: course.json unchanged")
     finally:
         shutil.rmtree(root, ignore_errors=True)
     print("All checks hold." if not problems else f"{len(problems)} check(s) failed.")

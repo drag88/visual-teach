@@ -47,8 +47,10 @@ CODEX_OFF = ("hooks", "memories", "multi_agent", "plugins", "apps", "browser_use
              "shell_snapshot", "goals")
 # The only environment a Codex shell command sees: enough to run tools, nothing that could hold a secret.
 CODEX_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE", "SSL_CERT_DIR")
-# Files a teaching session may read but never change (scripts/teach_guard.py keeps the Claude side to the same list).
 SIGN_IN = "Codex is not signed in. Run codex login in a terminal, then reload this page."
+UNFINISHED = "did not finish; reload the page to try again."
+# Files a teaching session may read but never change. scripts/teach_guard.py keeps the Claude side to the same list,
+# without .codex/, which only a Codex session could use.
 PROTECTED = ("course.json", ".serve.json", "CLAUDE.md", "AGENTS.md", ".claude", ".codex", "assets")
 ALWAYS_QUICK = {"explain", "simpler", "more"}
 KIND_TASK = {
@@ -413,6 +415,7 @@ class Course:
                     send("status", {"text": said.splitlines()[0][:120]})
                 pending.append(item.get("text") or "")
             elif kind == "turn.completed":
+                result.pop("error", None)  # an earlier error event was a notice the turn recovered from
                 usage = ev.get("usage") or {}
                 result["tokens"] = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
                 if pending:
@@ -535,6 +538,8 @@ class Course:
 
     def resolve_engine(self, requested):
         """(engine, None), or (None, why not). A named engine runs only if usable now, whatever asked for it."""
+        if requested == "claude" and self.claude:
+            return "claude", None  # Claude needs no preflight, so never waits on Codex's
         if requested:
             if requested in self.usable_engines():
                 return requested, None
@@ -600,12 +605,17 @@ class Course:
             if self.preflight and self.preflight[:2] == (binary, mtime) and not self.preflight[3]:
                 return self.preflight[2]
             result = self.run_preflight(binary)
-            self.preflight = (binary, mtime, result, result[1] == SIGN_IN)
+            # A sign-in, or a probe that did not finish, can come right without the binary changing: check again.
+            retry = result[1] == SIGN_IN or (result[1] or "").endswith(UNFINISHED)
+            self.preflight = (binary, mtime, result, retry)
             return result
 
     def run_preflight(self, binary, report=None):
         """The preflight itself. report(name, expected, exit code), when given, hears every probe instead of the
         run stopping at the first failure: tests/probe_codex_sandbox.py uses it."""
+        if WINDOWS:
+            # The probes use a POSIX shell; until there is a Windows version, Codex stays off rather than unproven.
+            return False, "Codex answers need macOS or Linux for now: its sandbox check is not built for Windows."
         try:
             signed_in = subprocess.run([binary, "login", "status"], capture_output=True, timeout=20).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
@@ -613,12 +623,21 @@ class Course:
         if not signed_in:
             return False, SIGN_IN
         tag = uuid.uuid4().hex[:8]
-        # The decoy sits beside the course, outside both temp folders, so it tests the deny on the whole disk.
-        decoy = self.ws.parent / f".visual-teach-probe-{tag}"
-        try:
-            decoy.mkdir()
-        except OSError:
-            decoy = Path(tempfile.mkdtemp(prefix="visual-teach-probe-"))
+        # The decoy must sit outside every folder a profile may read, and outside the temp folders, so the probe
+        # tests the deny on the rest of the disk. Beside the course is the usual place.
+        readable = [self.ws, Path(binary).parent.resolve()] + ([self.code] if self.code else [])
+        decoy = None
+        for place in (self.ws.parent, Path.home() / ".cache"):
+            if any(place.resolve() == r or r in place.resolve().parents for r in readable):
+                continue
+            try:
+                decoy = place / f".visual-teach-probe-{tag}"
+                decoy.mkdir(parents=True)
+                break
+            except OSError:
+                decoy = None
+        if decoy is None:
+            return False, "Codex is off: no folder outside the course and its source was free for the sandbox check."
         (decoy / "decoy.txt").write_text("decoy\n", encoding="utf-8")
         lessons = self.ws / "lessons" if (self.ws / "lessons").is_dir() else self.ws
         scratch = [self.ws / f".vt-probe-{tag}", lessons / f".vt-probe-{tag}.html",
@@ -653,7 +672,9 @@ class Course:
                     code = None
                 if report:
                     report(name, expect, code)
-                if (code == 0) != (expect == "ok") and not failed:
+                if code is None and not failed:  # a probe that never ran proves nothing either way
+                    failed = f"Codex is off: its sandbox check {name} {UNFINISHED}"
+                elif code is not None and (code == 0) != (expect == "ok") and not failed:
                     what = "worked" if expect == "ok" else "was refused"
                     failed = (f"Codex is off: its sandbox check {name} failed (it should have {what}). "
                               "Run tests/probe_codex_sandbox.py in the visual-teach repo for details.")
@@ -693,10 +714,11 @@ class Course:
             f"Run one visual-teach teaching session for the course in {self.ws}, started from the course page.",
             f"Read {SKILL / 'SKILL.md'} and follow it, with these differences:",
             "- The server has already synced the course's shared files, and it runs the course check after you finish.",
-            ("- Your shell runs in a sandbox: writes outside the course folder or to its protected files (course.json, "
-             ".serve.json, CLAUDE.md, AGENTS.md, .claude/, .codex/ and assets/ except assets/course.css) will fail. "
-             "Take no screenshots." if codex else
-             "- You have no shell: run no script and take no screenshots. Read and edit files only."),
+            ("- Run no scripts and take no screenshots. Your shell is for reading, and for editing files inside the "
+             "course; it runs in a sandbox with no network and no temp folders, and writes outside the course folder "
+             "or to its protected files (course.json, .serve.json, CLAUDE.md, AGENTS.md, .claude/, .codex/ and "
+             "assets/ except assets/course.css) fail. A refused command is final: do not retry it or work around it."
+             if codex else "- You have no shell: run no script and take no screenshots. Read and edit files only."),
             "- Edit only files inside the course folder. To mark a question thread handled, add its meta line "
             "after the last line of questions.jsonl.",
             "- You cannot search the web"
@@ -780,20 +802,13 @@ class Course:
             elif event == "delta":
                 job["summary"] += data["text"]
 
-        codex = job["engine"] == "codex"
-        snapshot = None
         try:
             if job["stopped"]:
                 return
             sync_course.sync(self.ws)
             if job["stopped"]:
                 return
-            if codex:
-                # After the sync, so the server's own asset updates are not mistaken for Codex's.
-                snapshot = self.protected_snapshot()
-                cmd = self.codex_command("teach", "deep")
-            else:
-                cmd = self.teach_command()
+            cmd = self.codex_command("teach", "deep") if job["engine"] == "codex" else self.teach_command()
             result = self.run(cmd, self.teach_prompt(job["action"], problems, job["engine"]), send,
                               lambda: job["stopped"], engine=job["engine"])
             if job["stopped"] or result is None:
@@ -813,42 +828,6 @@ class Course:
         finally:
             if job["stopped"]:
                 job["state"] = "stopped"
-            if snapshot is not None:
-                # On every exit: the Codex profile is the boundary, this catches a profile that stopped holding.
-                changed = self.restore_protected(snapshot)
-                if changed:
-                    job["error"] = (f"Codex changed {', '.join(changed)}, which it may not edit. It was put back; "
-                                    "lesson edits from this session were kept.")
-                    job["lines"].append(f"Put back {', '.join(changed)}")
-                    job["state"] = "failed"
-
-    def protected_snapshot(self):
-        """Bytes of every protected file now, keyed by path relative to the course. assets/course.css is the one
-        file under a protected folder that teaching may edit."""
-        snap = {}
-        for name in PROTECTED:
-            path = self.ws / name
-            files = [p for p in path.rglob("*") if p.is_file() and not p.is_symlink()] if path.is_dir() else [path]
-            for p in files:
-                rel = p.relative_to(self.ws).as_posix()
-                if rel != "assets/course.css":
-                    snap[rel] = p.read_bytes() if p.is_file() else None
-        return snap
-
-    def restore_protected(self, snapshot):
-        """Put every protected file back as the snapshot had it: edited and deleted ones rewritten, new ones
-        removed. Returns the relative paths that had changed."""
-        now_ = self.protected_snapshot()
-        changed = sorted(rel for rel in set(snapshot) | set(now_) if snapshot.get(rel) != now_.get(rel))
-        for rel in changed:
-            path = self.ws / rel
-            if snapshot.get(rel) is None:
-                if path.is_file():
-                    path.unlink()
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(snapshot[rel])
-        return changed
 
     def refresh_job(self, job, command):
         try:
