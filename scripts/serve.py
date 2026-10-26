@@ -641,9 +641,15 @@ class Course:
         return done.returncode != 1  # 1 is "not ignored"; 0 is ignored and 128 is an error
 
     def learning_records(self):
-        """The course's learning records, oldest first: file name and the first "# " heading."""
+        """The course's learning records, oldest first: file name and the first "# " heading. A symlinked folder or
+        entry points outside the course, so it is not listed, and so it can never be deleted either."""
+        folder = self.ws / "learning-records"
+        if folder.is_symlink():
+            return []
         out = []
-        for p in sorted((self.ws / "learning-records").glob("*.md")):
+        for p in sorted(folder.glob("*.md")):
+            if p.is_symlink() or not p.is_file():
+                continue
             text = read_text(p)
             title = next((line[2:].strip() for line in text.split("\n") if line.startswith("# ")), p.stem)
             out.append({"name": p.name, "title": title,
@@ -652,16 +658,24 @@ class Course:
 
     def delete_record(self, name):
         """Move one learning record to .deleted/learning-records/, so a mis-click can be undone by moving it back.
-        Only a name the listing would show is accepted, so no path can reach outside the folder."""
-        src = self.ws / "learning-records" / str(name)
-        if name not in {r["name"] for r in self.learning_records()} or src.is_symlink():
+        Only a name the listing shows is accepted, and a symlinked archive is refused, so nothing outside the
+        course is read or written. An earlier deleted copy of the same name is kept: the new one gets -1, -2..."""
+        if not isinstance(name, str) or name not in {r["name"] for r in self.learning_records()}:
             return False
-        dest = self.ws / ".deleted" / "learning-records"
+        archive = self.ws / ".deleted"
+        dest = archive / "learning-records"
+        if archive.is_symlink() or dest.is_symlink():
+            return False
         dest.mkdir(parents=True, exist_ok=True)
-        target = dest / src.name
-        if target.exists():
-            target = dest / f"{src.stem}-{datetime.now():%Y%m%d-%H%M%S}{src.suffix}"
-        src.rename(target)
+        src = self.ws / "learning-records" / name
+        target, n = dest / name, 0
+        with self.lock:  # two deletes at once must not pick the same free name, or move the same file twice
+            if not src.is_file():
+                return False
+            while target.exists():
+                n += 1
+                target = dest / f"{src.stem}-{n}{src.suffix}"
+            src.rename(target)
         return True
 
     def review(self):

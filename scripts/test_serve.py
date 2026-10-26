@@ -433,7 +433,7 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(json.loads(data)["records"], [
             {"name": "0001-runner.md", "title": "Runner landed", "superseded": True},
             {"name": "0002-tools.md", "title": "Tools landed", "superseded": False}])
-        for bad in ("../MISSION.md", "missing.md", None):
+        for bad in ("../MISSION.md", "missing.md", None, ["0002-tools.md"]):
             resp, _ = self.request("POST", "/api/records/delete", {"name": bad})
             self.assertEqual(resp.status, 404, bad)
         self.assertTrue((self.ws / "MISSION.md").exists())
@@ -442,6 +442,42 @@ class ServeTest(unittest.TestCase):
         self.assertTrue((self.ws / ".deleted/learning-records/0001-runner.md").exists(), "moved aside, not erased")
         _, data = self.request("GET", "/api/records")
         self.assertEqual([r["name"] for r in json.loads(data)["records"]], ["0002-tools.md"])
+
+    def test_deleting_a_record_twice_keeps_both_copies(self):
+        records, deleted = self.ws / "learning-records", self.ws / ".deleted/learning-records"
+        records.mkdir()
+        deleted.mkdir(parents=True)
+        (deleted / "0002-tools.md").write_text("first")
+        (deleted / "0002-tools-1.md").write_text("second")
+        (records / "0002-tools.md").write_text("# Tools landed\nthird")
+        resp, _ = self.request("POST", "/api/records/delete", {"name": "0002-tools.md"})
+        self.assertEqual(resp.status, 200)
+        self.assertEqual((deleted / "0002-tools.md").read_text(), "first")
+        self.assertEqual((deleted / "0002-tools-1.md").read_text(), "second")
+        self.assertEqual((deleted / "0002-tools-2.md").read_text(), "# Tools landed\nthird")
+
+    def test_symlinked_records_are_neither_listed_nor_moved(self):
+        outside = Path(self.tmp.name) / "outside"
+        outside.mkdir()
+        (outside / "0001-a.md").write_text("# Not the course's\n")
+        (self.ws / "learning-records").symlink_to(outside)  # the whole folder points elsewhere
+        _, data = self.request("GET", "/api/records")
+        self.assertEqual(json.loads(data)["records"], [])
+        resp, _ = self.request("POST", "/api/records/delete", {"name": "0001-a.md"})
+        self.assertEqual(resp.status, 404)
+        self.assertTrue((outside / "0001-a.md").exists())
+        (self.ws / "learning-records").unlink()
+        (self.ws / "learning-records").mkdir()
+        (self.ws / "learning-records/0002-link.md").symlink_to(outside / "0001-a.md")  # one entry points elsewhere
+        (self.ws / "learning-records/0003-real.md").write_text("# Real\n")
+        _, data = self.request("GET", "/api/records")
+        self.assertEqual([r["name"] for r in json.loads(data)["records"]], ["0003-real.md"])
+        resp, _ = self.request("POST", "/api/records/delete", {"name": "0002-link.md"})
+        self.assertEqual(resp.status, 404)
+        (self.ws / ".deleted").symlink_to(outside)  # the archive points elsewhere
+        resp, _ = self.request("POST", "/api/records/delete", {"name": "0003-real.md"})
+        self.assertEqual(resp.status, 404)
+        self.assertTrue((self.ws / "learning-records/0003-real.md").exists())
 
     def test_threads_for_a_blank_page_name_are_its_own(self):
         self.ask()
