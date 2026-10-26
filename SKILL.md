@@ -113,7 +113,7 @@ Lessons are read on phones, and diagram-design's default canvas and type are too
 - A lesson opened as a plain file works as before and shows a one-line hint about the server.
 - Every question and answer is appended to the course's `questions.jsonl`: one `user` and one `assistant` line per exchange, grouped by `thread`, with the passage's `anchor`. `meta` lines mark a thread `deleted` or `handled`. Never edit earlier lines.
 
-**Use the questions.** At the start of every session, read the threads with no `handled` line. They are the best evidence of what the learner understands:
+**Use the questions.** At the start of every session, read the threads with no `handled` or `deleted` line (a deleted thread is one the learner removed, so it is not evidence and gets no meta line). They are the best evidence of what the learner understands:
 - Understanding shown, or a misconception corrected: write a learning record.
 - A term asked about twice: a glossary candidate.
 - Simpler asked on a passage: rewrite that passage, and note it in `NOTES.md`.

@@ -2,6 +2,12 @@
 
 Notable changes to visual-teach. Versions follow [semantic versioning](https://semver.org): new features raise the middle number, fixes the last one. `.claude-plugin/plugin.json` carries the same version, and Claude Code installs with auto-update get a release when that number changes.
 
+## [Unreleased]
+
+### Fixed
+
+- Teaching sessions skip questions the learner deleted, instead of learning from them.
+
 ## [1.4.0] - 2026-10-22
 
 ### Changed
