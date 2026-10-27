@@ -1236,6 +1236,10 @@ class Handler(SimpleHTTPRequestHandler):
 class CourseServer(ThreadingHTTPServer):
     allow_reuse_address = not WINDOWS  # on Windows reuse would let another program share the port
 
+    def __init__(self, address, handler, course):
+        self.course = course  # before binding: a failed bind calls server_close, which tidies up the course
+        super().__init__(address, handler)
+
     def server_bind(self):
         if WINDOWS and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
@@ -1255,8 +1259,7 @@ def make_server(ws, port=8765, lan=False, code=None, claude=None, web=(), quiet=
     course = Course(ws, code, shutil.which("claude") if claude is None else claude, web,
                     shutil.which("codex") if codex is None else codex)
     handler = type("CourseHandler", (Handler,), {"course": course})
-    server = CourseServer(("0.0.0.0" if lan else "127.0.0.1", port), handler)
-    server.course = course
+    server = CourseServer(("0.0.0.0" if lan else "127.0.0.1", port), handler, course)
     server.daemon_threads = True
     server.token = secrets.token_urlsafe(16) if lan else None
     server.quiet = quiet

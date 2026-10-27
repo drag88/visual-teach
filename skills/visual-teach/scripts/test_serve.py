@@ -1271,6 +1271,16 @@ class ServeTest(ServerCase):
         for lan in (False, True):
             serve.make_server(self.ws, port=0, lan=lan, claude=self.claude, codex="").server_close()
 
+    def test_a_busy_port_is_reported_and_tidied_up(self):
+        temp = Path(tempfile.gettempdir())
+        before = set(temp.glob("visual-teach-*"))
+        with socket.socket() as blocker:
+            blocker.bind(("127.0.0.1", 0))
+            blocker.listen()
+            with self.assertRaises(OSError):  # the bind's own error, not one from tidying up after it
+                serve.make_server(self.ws, port=blocker.getsockname()[1], claude=self.claude, codex="")
+        self.assertEqual(set(temp.glob("visual-teach-*")), before, "the course's temp folder is removed")
+
     def test_lan_mode_needs_token(self):
         self.server.shutdown()
         self.server.server_close()
