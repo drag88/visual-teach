@@ -1264,6 +1264,13 @@ class ServeTest(ServerCase):
                                headers={"Host": f"evil.example:{self.port}", "Origin": f"http://evil.example:{self.port}"})
         self.assertEqual(resp.status, 403)
 
+    def test_starting_looks_up_no_names(self):
+        # Python's HTTP server looks up this computer's name before it listens: 35 s on GitHub's Mac runners.
+        self.addCleanup(setattr, socket, "getfqdn", socket.getfqdn)
+        socket.getfqdn = lambda *_: self.fail("the server looked up a name before listening")
+        for lan in (False, True):
+            serve.make_server(self.ws, port=0, lan=lan, claude=self.claude, codex="").server_close()
+
     def test_lan_mode_needs_token(self):
         self.server.shutdown()
         self.server.server_close()

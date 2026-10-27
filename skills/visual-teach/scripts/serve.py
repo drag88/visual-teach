@@ -25,6 +25,7 @@ import shlex
 import shutil
 import signal
 import socket
+import socketserver
 import subprocess
 import sys
 import tempfile
@@ -1238,7 +1239,10 @@ class CourseServer(ThreadingHTTPServer):
     def server_bind(self):
         if WINDOWS and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        # Not HTTPServer's: it looks up this computer's name before listening, which can take 35 s on a Mac, and a
+        # connection in that gap waits instead of being refused. Nothing here reads the name.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def server_close(self):
         stop_all(self.course)
