@@ -2,6 +2,13 @@
 
 Notable changes to visual-teach. Versions follow [semantic versioning](https://semver.org): new features raise the middle number, fixes the last one. `.claude-plugin/plugin.json` carries the same version, and Claude Code installs with auto-update get a release when that number changes.
 
+## [1.6.1] - 2026-10-27
+
+### Fixed
+
+- Opening a course could stall for half a minute or more on a Mac where looking up the computer's name is slow, and then report that the server did not start. The server now starts listening straight away.
+- A server started on a port another program holds now reports that the port is in use, and removes its temporary folder, instead of failing with an unrelated error.
+
 ## [1.6.0] - 2026-10-26
 
 ### Added
@@ -123,6 +130,7 @@ First public release.
 - Light and dark themes, a phone layout, and a phone link with `--lan`.
 - Windows process and path handling.
 
+[1.6.1]: https://github.com/drag88/visual-teach/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/drag88/visual-teach/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/drag88/visual-teach/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/drag88/visual-teach/compare/v1.4.0...v1.5.0
