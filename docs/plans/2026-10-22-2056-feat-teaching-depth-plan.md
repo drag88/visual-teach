@@ -13,7 +13,7 @@ task_folder: none (single-session change plus one bounded test)
 
 ## Evidence
 
-Verified on 22 Oct 2026. `~/.claude/skills/visual-teach` and `~/.codex/skills/visual-teach` both resolve to `/Users/asreenivas/code/visual-teach`; repo clean on `main` at v1.3.1; no repo CLAUDE.md or AGENTS.md. Courses: `~/learn/codex-harness` (2 lessons, thin) and `~/learn/adk` (4 lessons, strong). Lesson 2 of codex-harness and the later edits to lesson 1 came from the Teach button, which runs Opus (`scripts/serve.py:41`, `:446`); nothing records who wrote lesson 1 first.
+Verified on 22 Oct 2026. `~/.claude/skills/visual-teach` and `~/.codex/skills/visual-teach` both resolve to `~/code/visual-teach`; repo clean on `main` at v1.3.1; no repo CLAUDE.md or AGENTS.md. Courses: `~/learn/codex-harness` (2 lessons, thin) and `~/learn/adk` (4 lessons, strong). Lesson 2 of codex-harness and the later edits to lesson 1 came from the Teach button, which runs Opus (`scripts/serve.py:41`, `:446`); nothing records who wrote lesson 1 first.
 
 Learner evidence: codex-harness has one question thread, "what repair workshop and who is the owner here?". adk has about 27 threads with why, what-if and "how would an expert do this" questions, 12 quiz answers (6 missed first time), and 4 learning records that steered later lessons. A count of reasoning words per 100 words did not separate thin from strong (1.3 to 3.6, adk lesson 1 lowest), so no automated depth measure is proposed.
 

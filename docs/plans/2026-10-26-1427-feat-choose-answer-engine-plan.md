@@ -19,7 +19,7 @@ task_folder: none (one build session from this plan; reviews in docs/plans/revie
 - **Authority:** this plan's Requirements, then its KTDs, then the units. The three session-settled Key Decisions in the Product Contract (switch in the page, Teach on Codex, Codex's sandboxed shell) are not reopened during the build.
 - **Stop conditions:** stop and report if the Codex permission profiles cannot be shown to block a read outside the course and a write to a protected file on this Mac (U2 preflight). Stop and report if no Codex flag can be shown to keep a course's `.codex/` config and hooks from loading. Stop if the diff grows past about 1,200 lines.
 - **Execution profile:** one build session, test-first for the server pieces, then one `ce-code-review` with the cross-model pass before release.
-- **Who finishes:** the build agent implements and verifies. Aswin approves the commit, push and release.
+- **Who finishes:** the build agent implements and verifies. The maintainer approves the commit, push and release.
 
 ---
 
@@ -404,4 +404,4 @@ flowchart TB
 - `tests/probe_codex_sandbox.py` shows the outside read and protected write refused.
 - `ce-code-review` findings are fixed or recorded as accepted, with the review saved in `docs/plans/reviews/`.
 - No dead code from abandoned attempts remains in the diff.
-- Aswin has approved the commit, push and 1.6.0 release.
+- The maintainer has approved the commit, push and 1.6.0 release.
